@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v1";
+const VERSION = "vp-tracker-v2";
 const SHELL = [
   "./",
   "./index.html",
@@ -9,10 +9,13 @@ const SHELL = [
   "./data.js",
   "./app.js",
   "./sound.js",
+  "./achievements.js",
   "./sync.js",
+  "./push.js",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
+  "./icon-maskable-512.png",
 ];
 
 self.addEventListener("install", (event) => {
