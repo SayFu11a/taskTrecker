@@ -337,3 +337,108 @@ const SOURCES = [
   { name: "web.dev", text: "веб и производительность", url: "https://web.dev/" },
   { name: "Frontend Focus", text: "еженедельная подборка", url: "https://frontendfoc.us/" },
 ];
+
+/* ── Достижения ──────────────────────────────────────────────────────
+   Проверяются из уже сохранённых данных: отдельного учёта не требуется.
+   У каждого — id, иконка, описание и условие (fn получает срез прогресса). */
+
+const ACHIEVEMENTS = [
+  {
+    id: "first-day",
+    icon: "🌱",
+    title: "Первый шаг",
+    desc: "Отметь любой блок — и день уже считается закрытым.",
+    check: (p) => p.closedDays >= 1,
+  },
+  {
+    id: "first-norm",
+    icon: "✅",
+    title: "Норма взята",
+    desc: "Закрой день полностью по норме.",
+    check: (p) => p.fullNormDays >= 1,
+  },
+  {
+    id: "streak-3",
+    icon: "🔥",
+    title: "Три дня подряд",
+    desc: "Серия из трёх закрытых дней.",
+    check: (p) => p.bestStreak >= 3,
+  },
+  {
+    id: "streak-7",
+    icon: "⚡",
+    title: "Неделя без пропусков",
+    desc: "Семь закрытых дней подряд.",
+    check: (p) => p.bestStreak >= 7,
+  },
+  {
+    id: "bad-day-5",
+    icon: "🫥",
+    title: "Минимум — это победа",
+    desc: "Пять дней, закрытых на минимуме. Плохие дни тоже считаются.",
+    check: (p) => p.minDays >= 5,
+  },
+  {
+    id: "gym-1",
+    icon: "💪",
+    title: "Первая тренировка",
+    desc: "Отметь одну тренировку недели.",
+    check: (p) => p.gymDone >= 1,
+  },
+  {
+    id: "gym-9",
+    icon: "🏋️",
+    title: "Три недели силовых",
+    desc: "Девять тренировок — по три в неделю.",
+    check: (p) => p.gymDone >= 9,
+  },
+  {
+    id: "leetcode-1",
+    icon: "🧩",
+    title: "Первая задача",
+    desc: "Запиши задачу в журнал LeetCode.",
+    check: (p) => p.leetcodeCount >= 1,
+  },
+  {
+    id: "leetcode-10",
+    icon: "🧠",
+    title: "Десять задач",
+    desc: "Десять записей в журнале — видно, какие темы проседают.",
+    check: (p) => p.leetcodeCount >= 10,
+  },
+  {
+    id: "leetcode-30",
+    icon: "🎯",
+    title: "Тридцать задач",
+    desc: "Тридцать разобранных задач.",
+    check: (p) => p.leetcodeCount >= 30,
+  },
+  {
+    id: "interviews-5",
+    icon: "🗣️",
+    title: "Голос поставлен",
+    desc: "Пять дней с подготовкой к собеседованиям.",
+    check: (p) => p.blockInterviews >= 5,
+  },
+  {
+    id: "jobs-10",
+    icon: "📮",
+    title: "Десять дней откликов",
+    desc: "Поиск работы — отдельная задача, и ты её делаешь.",
+    check: (p) => p.blockJobs >= 10,
+  },
+  {
+    id: "all-blocks",
+    icon: "🌟",
+    title: "Все блоки за день",
+    desc: "Отметь все семь блоков в один день.",
+    check: (p) => p.maxBlocksInDay >= 7,
+  },
+  {
+    id: "thirty-days",
+    icon: "📅",
+    title: "Месяц в системе",
+    desc: "Тридцать закрытых дней — суммарно.",
+    check: (p) => p.closedDays >= 30,
+  },
+];
