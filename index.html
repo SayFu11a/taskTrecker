@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Возвращение в профессию — трекер</title>
+<meta name="description" content="Расписание возвращения во frontend: учёба, собеседования, работа, тренировки — с уровнями минимум / норма / максимум." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="bg-glow" aria-hidden="true"></div>
+
+<header class="wrap hero">
+  <div class="hero-main">
+    <div class="eyebrow"><span class="dot"></span> Система, а не экзамен</div>
+    <h1>Возвращение <span class="accent">в профессию</span></h1>
+    <p class="lead">
+      Программирование, собеседования, поиск работы и тело. У каждого блока есть
+      <strong>минимум</strong> — его хватает даже в плохой день.
+    </p>
+    <div class="hero-stats" id="heroStats"></div>
+  </div>
+
+  <div class="ring-card">
+    <div class="ring" id="ring">
+      <svg viewBox="0 0 120 120">
+        <circle class="ring-bg" cx="60" cy="60" r="52" />
+        <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="52" />
+      </svg>
+      <div class="ring-label">
+        <span id="ringPct">0%</span>
+        <small>дня</small>
+      </div>
+    </div>
+    <p class="ring-text" id="ringText">Отметь первые задачи</p>
+    <div class="date-picker">
+      <button class="ghost-btn" id="prevDay" aria-label="Предыдущий день">‹</button>
+      <input type="date" id="dateInput" />
+      <button class="ghost-btn" id="nextDay" aria-label="Следующий день">›</button>
+    </div>
+  </div>
+</header>
+
+<nav class="wrap tabs" role="tablist">
+  <button class="tab active" data-tab="day" role="tab">День</button>
+  <button class="tab" data-tab="week" role="tab">Неделя</button>
+  <button class="tab" data-tab="gym" role="tab">Тренировки</button>
+  <button class="tab" data-tab="progress" role="tab">Прогресс</button>
+  <button class="tab" data-tab="rules" role="tab">Правила</button>
+</nav>
+
+<main class="wrap">
+
+  <!-- ─────────── ДЕНЬ ─────────── -->
+  <section class="panel active" id="panel-day">
+    <div class="mode-bar">
+      <div class="mode-buttons" id="modeButtons"></div>
+      <p class="mode-hint" id="modeHint"></p>
+    </div>
+
+    <div class="bad-day card" id="badDayCard">
+      <div class="bad-day-head">
+        <div>
+          <h2>🫥 План «Плохой день»</h2>
+          <p>Нет сил, плохое настроение, ничего не хочется. Этого достаточно.</p>
+        </div>
+        <div class="bad-day-total" id="badDayTotal"></div>
+      </div>
+      <ul class="bad-day-list" id="badDayList"></ul>
+      <p class="bad-day-rule" id="badDayRule"></p>
+    </div>
+
+    <div class="section-head">
+      <h2>Чек-лист дня</h2>
+      <p>Отмечай уровень, который честно сделал. Не обязательно всё и не обязательно по максимуму.</p>
+    </div>
+    <div class="blocks" id="blocks"></div>
+
+    <div class="section-head">
+      <h2>Каркас дня</h2>
+      <p>Старт в 09:00. Это ориентир, а не жёсткие дедлайны.</p>
+    </div>
+    <div class="timeline" id="timeline"></div>
+  </section>
+
+  <!-- ─────────── НЕДЕЛЯ ─────────── -->
+  <section class="panel" id="panel-week">
+    <div class="section-head">
+      <h2>Недельный план</h2>
+      <p>Ulbi TV — основной маршрут, остальные блоки дополняют его. Темы собеседований распределены по дням.</p>
+    </div>
+    <div class="week-grid" id="weekGrid"></div>
+
+    <div class="section-head">
+      <h2>Как выйти на 7–8 часов</h2>
+      <p>Без резкого старта. Застрял на этапе — оставайся на нём дольше.</p>
+    </div>
+    <div class="phases" id="phases"></div>
+  </section>
+
+  <!-- ─────────── ТРЕНИРОВКИ ─────────── -->
+  <section class="panel" id="panel-gym">
+    <div class="section-head">
+      <h2>Программа тренировок</h2>
+      <p>3 силовые в неделю: Пн A · Ср B · Пт A. На следующей неделе порядок меняется (B / A / B).</p>
+    </div>
+
+    <div class="gym-top">
+      <div class="week-picker card">
+        <div class="week-picker-head">
+          <span>Неделя программы</span>
+          <strong id="weekNum">1</strong>
+        </div>
+        <div class="week-dots" id="weekDots"></div>
+        <p class="week-note" id="weekNote"></p>
+      </div>
+      <div class="gym-tracker card">
+        <div class="week-picker-head">
+          <span>Отметки недели</span>
+          <strong id="gymCount">0/3</strong>
+        </div>
+        <div class="gym-checks" id="gymChecks"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Разминка · 5–7 минут</h3>
+      <ul class="warmup" id="warmup"></ul>
+    </div>
+
+    <div class="workouts" id="workouts"></div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3>🎯 Путь к первому подтягиванию</h3>
+        <ol class="steps" id="pullupSteps"></ol>
+      </div>
+      <div class="card">
+        <h3>🔄 Восстановление</h3>
+        <div class="recovery" id="recovery"></div>
+      </div>
+    </div>
+
+    <div class="card soft">
+      <h3>Уровни на плохой / обычный / хороший день</h3>
+      <div class="lvl-row"><span class="lvl bad">Плохой</span> 5–10 минут разминки или прогулки</div>
+      <div class="lvl-row"><span class="lvl norm">Обычный</span> Полная тренировка 25–35 минут</div>
+      <div class="lvl-row"><span class="lvl good">Хороший</span> Полная тренировка + прогулка 15–20 минут</div>
+      <p class="muted small">Максимум — это не дополнительная силовая. Восстановление тоже часть программы.</p>
+    </div>
+  </section>
+
+  <!-- ─────────── ПРОГРЕСС ─────────── -->
+  <section class="panel" id="panel-progress">
+    <div class="section-head">
+      <h2>Прогресс</h2>
+      <p>День считается закрытым, если отмечен хотя бы один блок. Даже минимум.</p>
+    </div>
+    <div class="stat-grid" id="statGrid"></div>
+
+    <div class="card">
+      <h3>Последние 5 недель</h3>
+      <div class="heatmap-wrap">
+        <div class="heatmap" id="heatmap"></div>
+        <div class="heat-legend">
+          <span class="muted small">меньше</span>
+          <i class="heat l0"></i><i class="heat l1"></i><i class="heat l2"></i><i class="heat l3"></i>
+          <span class="muted small">больше</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Что чаще всего проседает</h3>
+      <div class="bars" id="bars"></div>
+    </div>
+
+    <div class="card soft">
+      <h3>Журнал LeetCode</h3>
+      <p class="muted small">Задача · тема · сложность · решил сам? · когда повторить</p>
+      <div class="lc-form">
+        <input id="lcName" placeholder="Название задачи" />
+        <input id="lcTheme" placeholder="Тема (например, Two Pointers)" />
+        <select id="lcDiff"><option>Easy</option><option>Medium</option><option>Hard</option></select>
+        <button class="primary-btn" id="lcAdd">Добавить</button>
+      </div>
+      <div class="lc-list" id="lcList"></div>
+    </div>
+
+    <div class="card danger-zone">
+      <h3>Сброс</h3>
+      <p class="muted small">Удаляет все отметки, журнал и статистику из этого браузера.</p>
+      <button class="danger-btn" id="resetBtn">Сбросить всё</button>
+    </div>
+  </section>
+
+  <!-- ─────────── ПРАВИЛА ─────────── -->
+  <section class="panel" id="panel-rules">
+    <div class="section-head">
+      <h2>Правила системы</h2>
+      <p>Это то, что удерживает план живым дольше двух недель.</p>
+    </div>
+    <div class="rules" id="rules"></div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3>📡 Что смотреть про Frontend</h3>
+        <p class="muted small">15–20 минут, 3–4 раза в неделю — и всё.</p>
+        <ul class="sources" id="sources"></ul>
+      </div>
+      <div class="card">
+        <h3>🗂️ Три вещи, которые стоит завести</h3>
+        <ul class="steps">
+          <li><strong>Список вопросов с собеседований.</strong> Любая незнакомая тема из вакансии или интервью — туда.</li>
+          <li><strong>Журнал LeetCode.</strong> Задача, тема, решил ли сам, когда повторить.</li>
+          <li><strong>Ревизия в субботу.</strong> Уроки, темы, задачи, отклики, тренировки — и план на следующую неделю.</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="footer-note">
+      Нагрузка построена с ориентиром на рекомендации ВОЗ: 150+ минут умеренной активности в неделю
+      и силовые упражнения минимум дважды в неделю. Система — опора, а не экзамен: 20 минут в плохой день
+      лучше, чем ещё один день избегания.
+    </p>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
