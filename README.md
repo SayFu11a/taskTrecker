@@ -25,6 +25,31 @@
 python3 -m http.server 8100
 ```
 
+## Деплой
+
+Сайт задеплоен на Vercel: **https://profession-tracker.vercel.app**
+
+Настройки сборки зафиксированы в `vercel.json` в корне репозитория, чтобы проект
+не зависел от того, что вручную выставлено в дашборде Vercel:
+
+```json
+{
+  "framework": null,
+  "buildCommand": null,
+  "installCommand": null,
+  "outputDirectory": "."
+}
+```
+
+- `framework: null` — отключает пресет фреймворка, репозиторий считается обычной статикой;
+- `buildCommand` / `installCommand: null` — шагов установки и сборки нет (нет `package.json`);
+- `outputDirectory: "."` — публикуется корень репозитория, где лежит `index.html`.
+
+Значения из `vercel.json` переопределяют Project Settings, поэтому проект собирается
+одинаково после переимпорта или в форке. Только строки или `null`: `false` Vercel
+отклоняет с ошибкой схемы. Без `outputDirectory: "."` сборка падает с
+`STATIC_BUILD_NO_OUT_DIR`, потому что Vercel ищет папку `public/`.
+
 ## Данные
 
 Все отметки хранятся в `localStorage` браузера (ключ `vp-tracker-v1`). Бэкенда нет.
