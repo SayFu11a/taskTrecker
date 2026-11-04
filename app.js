@@ -8,7 +8,14 @@ const DEFAULT_STATE = {
   gym: {},         // { "1": { mon: true, wed: false, fri: true } }
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
+  scheduleView: "detail", // "detail" | "coarse"
 };
+
+/* structuredClone есть не везде (Safari < 15.4) — без него падал весь трекер */
+const cloneDeep = (obj) =>
+  typeof structuredClone === "function"
+    ? structuredClone(obj)
+    : JSON.parse(JSON.stringify(obj));
 
 let state = load();
 let selectedDate = todayKey();
@@ -18,11 +25,11 @@ let selectedDate = todayKey();
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return structuredClone(DEFAULT_STATE);
+    if (!raw) return cloneDeep(DEFAULT_STATE);
     const parsed = JSON.parse(raw);
-    return { ...structuredClone(DEFAULT_STATE), ...parsed };
+    return { ...cloneDeep(DEFAULT_STATE), ...parsed };
   } catch {
-    return structuredClone(DEFAULT_STATE);
+    return cloneDeep(DEFAULT_STATE);
   }
 }
 
@@ -61,6 +68,7 @@ function weekdayIndex(key) {
 }
 
 const humanDate = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", weekday: "long" });
+const DATE_FMT = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" });
 
 function el(tag, cls, html) {
   const n = document.createElement(tag);
@@ -393,6 +401,250 @@ function gymPlanFor(week) {
   ];
 }
 
+/* ─────────────── «Сейчас»: время, день, тренировка ─────────────── */
+
+function minutesOf(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function fmtMinutes(total) {
+  const t = Math.max(0, total);
+  const h = Math.floor(t / 60);
+  const m = t % 60;
+  if (h && m) return `${h} ч ${m} мин`;
+  if (h) return `${h} ч`;
+  return `${m} мин`;
+}
+
+function currentTimeline() {
+  const view = state.scheduleView === "coarse" ? "coarse" : "detail";
+  return SCHEDULE_VIEWS[view].timeline;
+}
+
+/* Какой сейчас интервал. Возвращает {slot, index, left, next} или null вне расписания. */
+function slotNow(date) {
+  const timeline = currentTimeline();
+  const mins = date.getHours() * 60 + date.getMinutes();
+  for (let i = 0; i < timeline.length; i++) {
+    const from = minutesOf(timeline[i].from);
+    const to = minutesOf(timeline[i].to);
+    if (mins >= from && mins < to) {
+      return { slot: timeline[i], index: i, left: to - mins, next: timeline[i + 1] || null };
+    }
+  }
+  return null;
+}
+
+/* Тренировка на конкретный день недели (0 = понедельник), с чередованием A/B по неделям. */
+function workoutForWeekday(weekdayIdx) {
+  const odd = state.week % 2 === 1;
+  if (weekdayIdx === 0) return { kind: "workout", workout: odd ? "A" : "B" };
+  if (weekdayIdx === 2) return { kind: "workout", workout: odd ? "B" : "A" };
+  if (weekdayIdx === 4) return { kind: "workout", workout: odd ? "A" : "B" };
+  if (weekdayIdx === 6) return { kind: "rest" };
+  return { kind: "walk" };
+}
+
+function workoutText(info) {
+  if (info.kind === "workout") {
+    const list = WORKOUTS[info.workout].exercises.map((e) => `${e.name} ${e.reps[state.week - 1]}`);
+    return { title: `💪 Тренировка ${info.workout}`, sub: list.join(" · "), tag: "силовая" };
+  }
+  if (info.kind === "walk") {
+    return { title: "🚶 Восстановление", sub: "Прогулка 20–30 минут, лёгкая растяжка. Тяжёлая нагрузка сегодня не нужна.", tag: "прогулка" };
+  }
+  return { title: "🌿 Выходной", sub: "Спорт — только по желанию. Никакого чувства вины за отдых.", tag: "отдых" };
+}
+
+/* Уровень блока по текущему режиму дня. */
+function targetLevelFor(dateKey) {
+  const target = MODE_TARGET[modeFor(dateKey)];
+  return target === 1 ? "min" : target === 2 ? "norm" : "max";
+}
+
+const LEVEL_TEXT = { min: "минимум", norm: "норма", max: "максимум" };
+
+function renderNow() {
+  const root = document.getElementById("nowCard");
+  if (!root) return;
+
+  const now = new Date();
+  const nowKey = keyOf(now);
+  const isToday = selectedDate === nowKey;
+  const dow = (now.getDay() + 6) % 7;
+  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const mode = modeFor(nowKey);
+  const info = slotNow(now);
+  const workout = workoutForWeekday(dow);
+  const wt = workoutText(workout);
+
+  /* плохой день важнее расписания */
+  if (mode === "bad") {
+    root.className = "now-card now-bad";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill now-pill-live"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">🫥</div>
+        <div class="now-text">
+          <div class="now-title">Сегодня плохой день</div>
+          <div class="now-sub">${BAD_DAY.total} по плану: ${BAD_DAY.items.map((i) => i.text.split(" — ")[0]).join(", ")}.</div>
+        </div>
+      </div>
+      <div class="now-foot">
+        <span class="now-note">Расписание сегодня не обязательно. Сделал минимум — день закрыт.</span>
+      </div>`;
+    return;
+  }
+
+  if (!info) {
+    root.className = "now-card now-off";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">🌙</div>
+        <div class="now-text">
+          <div class="now-title">Вне расписания</div>
+          <div class="now-sub">Расписание идёт с 09:00 до 23:00. Отдых — тоже часть плана.</div>
+        </div>
+      </div>
+      <div class="now-foot">
+        <span class="now-workout">${wt.title} · ${wt.tag}</span>
+        <span class="now-note">${wt.sub}</span>
+      </div>`;
+    return;
+  }
+
+  const { slot, left, next } = info;
+  const total = minutesOf(slot.to) - minutesOf(slot.from);
+  const pct = Math.min(100, Math.round(((total - left) / total) * 100));
+
+  /* подпись для тренировки внутри её интервала */
+  let workoutTitle = wt.title;
+  if (slot.tag === "тело") {
+    workoutTitle =
+      workout.kind === "workout"
+        ? `💪 Сегодня тренировка ${workout.workout}`
+        : workout.kind === "walk"
+          ? "🚶 Сегодня восстановление"
+          : "🌿 Сегодня выходной";
+  }
+
+  /* статус блока, если интервал привязан к чек-листу */
+  let blockLine = "";
+  if (slot.block) {
+    const block = BLOCKS.find((b) => b.id === slot.block);
+    const data = state.days[nowKey] || {};
+    const done = data[slot.block];
+    const target = targetLevelFor(nowKey);
+    if (block) {
+      blockLine = done
+        ? `<button class="now-done is-done" disabled>✓ Отмечено: ${LEVEL_TEXT[done]} · ${block[done]}</button>`
+        : `<button class="now-done" data-mark="${slot.block}" data-level="${target}">Отметить ${LEVEL_TEXT[target]} · ${block[target]}</button>`;
+    }
+  }
+
+  const isBreak = slot.tag === "пауза" || slot.tag === "свободно" || slot.tag === "вечер";
+
+  root.className = "now-card" + (isBreak ? " now-break" : "");
+  root.innerHTML = `
+    <div class="now-head">
+      <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+      <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+    </div>
+    <div class="now-main">
+      <div class="now-icon">${slot.icon || "•"}</div>
+      <div class="now-text">
+        <div class="now-title">${slot.label}</div>
+        <div class="now-sub">
+          ${slot.from}–${slot.to} · осталось ${fmtMinutes(left)}
+          ${slot.short ? `· <span class="now-tag">${slot.short}</span>` : ""}
+        </div>
+      </div>
+    </div>
+    <div class="now-progress"><span style="width:${pct}%"></span></div>
+    ${blockLine}
+    <div class="now-foot">
+      ${next ? `<span class="now-next">Дальше ${next.from} · ${next.label}</span>` : `<span class="now-next">Последний блок дня</span>`}
+      <span class="now-workout">${workoutTitle}</span>
+    </div>
+    ${!isToday ? `<div class="now-hint">Открыт другой день — плашка показывает текущий момент.</div>` : ""}`;
+
+  const btn = root.querySelector("[data-mark]");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      const data = dayData(nowKey);
+      const id = btn.dataset.mark;
+      const level = btn.dataset.level;
+      data[id] = level;
+      save();
+      if (selectedDate !== nowKey) {
+        selectedDate = nowKey;
+        dateInput.value = selectedDate;
+      }
+      renderAll();
+      toast(`Отмечено: ${LEVEL_TEXT[level]}. Этого достаточно.`);
+    });
+  }
+}
+
+/* Полное расписание под чек-листом */
+function renderTimeline() {
+  const root = document.getElementById("timeline");
+  if (!root) return;
+  const timeline = currentTimeline();
+  const now = new Date();
+  const nowKey = keyOf(now);
+  const active = selectedDate === nowKey ? slotNow(now) : null;
+  const data = state.days[selectedDate] || {};
+  const target = targetLevelFor(selectedDate);
+
+  root.innerHTML = "";
+
+  const switcher = el("div", "tl-switch");
+  Object.entries(SCHEDULE_VIEWS).forEach(([key, v]) => {
+    const b = el("button", "tl-switch-btn" + (state.scheduleView === key || (!state.scheduleView && key === "detail") ? " on" : ""), v.label);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      state.scheduleView = key;
+      save();
+      renderTimeline();
+      renderNow();
+    });
+    switcher.appendChild(b);
+  });
+  root.appendChild(switcher);
+
+  timeline.forEach((slot, i) => {
+    const isNow = active && active.index === i;
+    const isPast = selectedDate === nowKey && active && i < active.index;
+    const row = el(
+      "div",
+      "tl-row" + (isNow ? " is-now" : "") + (slot.tag === "глубоко" ? " strong" : "") + (isPast ? " is-past" : "")
+    );
+    const done = slot.block && data[slot.block];
+    row.innerHTML = `
+      <span class="tl-time">${slot.from}<small>–${slot.to}</small></span>
+      <span class="tl-label">${slot.icon ? `<span class="tl-ico">${slot.icon}</span>` : ""}${slot.label}${
+        done ? ` <span class="tl-done">✓ ${LEVEL_TEXT[done]}</span>` : ""
+      }</span>
+      ${isNow ? '<span class="tl-now">сейчас</span>' : ""}`;
+    root.appendChild(row);
+  });
+
+  if (selectedDate === nowKey && active && active.slot.block && data[active.slot.block] === undefined) {
+    /* подсказка под расписанием — что отметить прямо сейчас */
+    const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === active.slot.block).name}».`);
+    root.appendChild(hint);
+  }
+}
+
 /* ─────────────── прогресс ─────────────── */
 
 function renderProgress() {
@@ -584,7 +836,7 @@ document.getElementById("lcAdd").addEventListener("click", () => {
 
 document.getElementById("resetBtn").addEventListener("click", () => {
   if (!confirm("Точно удалить все отметки, журнал и статистику?")) return;
-  state = structuredClone(DEFAULT_STATE);
+  state = cloneDeep(DEFAULT_STATE);
   save();
   selectedDate = todayKey();
   dateInput.value = selectedDate;
@@ -602,11 +854,30 @@ function renderAll() {
   renderProgress();
   renderWeek();
   renderGym();
+  renderNow();
+  renderTimeline();
 }
 
 renderBadDay();
 renderRules();
 renderAll();
+
+/* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
+setInterval(() => {
+  renderNow();
+  const nowKey = keyOf(new Date());
+  const panel = document.getElementById("panel-day");
+  if (panel && panel.classList.contains("active")) renderTimeline();
+  if (selectedDate === nowKey && state.days[nowKey]) renderBlocks();
+}, 30000);
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    renderNow();
+    if (selectedDate !== todayKey()) return;
+    renderTimeline();
+  }
+});
 
 /* подсказка при первом визите */
 if (!localStorage.getItem(STORE_KEY + ":seen")) {
