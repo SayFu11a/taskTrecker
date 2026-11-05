@@ -7,10 +7,17 @@ const SUPABASE_ANON_KEY = "sb_publishable_iYTOoi7jGnBydA4yfbdivA_IWUs-PDb"; // a
 
 const SYNC_PENDING_KEY = "vp-tracker-pending";
 
+/* Куда Google возвращает после входа. Должно совпадать с Site URL в Supabase
+   (Authentication → URL Configuration), иначе человека уводит на localhost.
+   Пусто — берём текущий адрес страницы. */
+const APP_URL = "https://profession-tracker.vercel.app/";
+
 let sb = null; // клиент
 let session = null;
 let syncBusy = false;
 let pushTimer = null;
+let lastAuthError = null; // ошибка возврата после входа — показывается на экране аккаунта
+let authPending = false; // SDK ещё грузится — чтобы блок не был пустым
 
 function syncConfigured() {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -24,12 +31,22 @@ async function initSync() {
     return;
   }
 
+  authPending = true;
+  renderAccount(); // сразу показываем «подключаю», а не пустую плашку
+
   try {
-    /* SDK грузим динамически: без настроенного Supabase лишних запросов нет */
-    const mod = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+    /* SDK грузим динамически: без настроенного Supabase лишних запросов нет.
+       Таймаут обязателен: если CDN заблокирован блокировщиком, промис
+       может висеть вечно, и экран аккаунта останется пустым. */
+    const mod = await Promise.race([
+      import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("SDK не загрузился за 10 секунд")), 10000)),
+    ]);
     sb = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
+
+    await reportOauthError();
 
     const { data } = await sb.auth.getSession();
     session = data.session || null;
@@ -44,23 +61,34 @@ async function initSync() {
     else if (hasLocalData()) await maybeOfferMigration();
   } catch (e) {
     console.warn("Синхронизация недоступна", e);
+    sb = null;
+  } finally {
+    authPending = false;
+    renderAccount();
   }
-
-  renderAccount();
 }
 
 /* ─────────── вход / выход ─────────── */
 
 async function signInWithGoogle() {
   if (!sb) {
-    toast("Сначала впиши ключи Supabase — инструкция в README.");
+    toast("Ключи не загрузились. Обнови страницу — если не помогло, проверь sync.js.");
     return;
   }
+
+  /* Явный адрес возврата. Без него Supabase подставляет Site URL,
+     а он по умолчанию localhost:3000 — вход «проходит» и уводит в никуда. */
+  const redirectTo = APP_URL || window.location.origin + window.location.pathname;
+
   const { error } = await sb.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: window.location.origin + window.location.pathname },
+    options: { redirectTo, skipBrowserRedirect: false },
   });
-  if (error) toast("Не получилось войти: " + error.message);
+
+  if (error) {
+    console.warn("Вход не удался", error);
+    toast("Не получилось войти: " + error.message);
+  }
 }
 
 async function signOut() {
@@ -228,6 +256,37 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && sb && session && !syncBusy) pullThenPush();
 });
 
+/* ─────────── ошибки возврата после входа ─────────── */
+
+/* Supabase присылает проблему в адресе: #error=access_denied&error_description=…
+   Без этого человек видит «ничего не произошло» и не понимает, что делать. */
+async function reportOauthError() {
+  const raw = window.location.hash || window.location.search || "";
+  if (!/error/.test(raw)) return false;
+
+  const params = new URLSearchParams(raw.replace(/^#/, "?"));
+  const code = params.get("error") || "";
+  const desc = params.get("error_description") || "";
+
+  const readable = {
+    access_denied: "Вход отменён на стороне Google.",
+    server_error: "Supabase не смог завершить вход.",
+    unauthorized_client: "Google-клиент настроен неверно: адрес возврата не разрешён.",
+    invalid_request: "Некорректный запрос к Supabase — чаще всего из-за Site URL.",
+  };
+
+  const hint = readable[code] || desc.replace(/\+/g, " ") || code;
+  lastAuthError = { code, desc: desc.replace(/\+/g, " ") };
+  toast("Вход не удался: " + hint);
+
+  /* чистим адрес, чтобы ошибка не всплывала при каждой перезагрузке */
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
+  return true;
+}
+
 /* ─────────── интерфейс ─────────── */
 
 function renderAccount() {
@@ -247,16 +306,48 @@ function renderAccount() {
   }
 
   if (!session) {
+    /* если ключи есть, но клиент не создался — показываем причину, а не молчим */
+    const broken = !sb && !authPending;
+
+    if (authPending) {
+      root.innerHTML = `
+        <div class="acc-row">
+          <span class="acc-dot off"></span>
+          <div>
+            <div class="acc-title">Подключаю аккаунт…</div>
+            <div class="acc-sub">Загружаю библиотеку Supabase с CDN.</div>
+          </div>
+        </div>
+        <button class="primary-btn acc-btn" disabled>Войти через Google</button>`;
+      return;
+    }
+    const errorNote = lastAuthError
+      ? `<div class="acc-error">Предыдущая попытка не удалась: ${
+          lastAuthError.code || "ошибка"
+        }${lastAuthError.desc ? " — " + lastAuthError.desc : ""}</div>`
+      : "";
+
     root.innerHTML = `
       <div class="acc-row">
         <span class="acc-dot off"></span>
         <div>
-          <div class="acc-title">Войди, чтобы синхронизировать</div>
-          <div class="acc-sub">Один аккаунт — телефон и компьютер видят одни и те же отметки.</div>
+          <div class="acc-title">${broken ? "Не удалось загрузить Supabase" : "Войди, чтобы синхронизировать"}</div>
+          <div class="acc-sub">${
+            broken
+              ? "Ключи вписаны, но SDK не загрузился. Обычно это блокировщик рекламы или офлайн."
+              : "Один аккаунт — телефон и компьютер видят одни и те же отметки."
+          }</div>
         </div>
       </div>
-      <button class="primary-btn acc-btn" id="googleSignIn">Войти через Google</button>`;
-    document.getElementById("googleSignIn").addEventListener("click", signInWithGoogle);
+      ${errorNote}
+      <button class="primary-btn acc-btn" id="googleSignIn" ${broken ? "disabled" : ""}>Войти через Google</button>
+      ${broken ? `<button class="ghost-btn acc-btn acc-btn-second" id="retrySdk">Попробовать снова</button>` : ""}`;
+
+    const btn = document.getElementById("googleSignIn");
+    if (btn) btn.addEventListener("click", signInWithGoogle);
+
+    const retry = document.getElementById("retrySdk");
+    if (retry) retry.addEventListener("click", () => initSync());
     return;
   }
 
