@@ -67,6 +67,7 @@ create policy "push: своё" on public.push_subscriptions
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = pg_catalog
 as $$
 begin
   new.updated_at = now();
@@ -86,3 +87,15 @@ create trigger settings_touch
 
 -- Готово. Дальше: Authentication → Providers → Google (включить),
 -- и вписать Project URL + anon key в sync.js и push.js.
+
+-- ─────────── безопасность функций ───────────
+-- push_reminders_tick() — SECURITY DEFINER, читает секрет из Vault и дёргает
+-- Edge Function. Клиентам вызывать её незачем: только cron (роль postgres).
+revoke execute on function public.push_reminders_tick() from public;
+revoke execute on function public.push_reminders_tick() from anon;
+revoke execute on function public.push_reminders_tick() from authenticated;
+
+-- touch_updated_at() — только триггерная функция, снаружи не нужна.
+revoke execute on function public.touch_updated_at() from public;
+revoke execute on function public.touch_updated_at() from anon;
+revoke execute on function public.touch_updated_at() from authenticated;
