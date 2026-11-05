@@ -947,7 +947,7 @@ function renderTimeline() {
     root.appendChild(row);
   });
 
-  if (selectedDate === nowKey && active && active.slot.block && data[active.slot.block] === undefined) {
+  if (selectedDate === nowKey && active && active.slot.block && !hoursFor(nowKey, active.slot.block)) {
     /* подсказка под расписанием — что отметить прямо сейчас */
     const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === active.slot.block).name}».`);
     root.appendChild(hint);
