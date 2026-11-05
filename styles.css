@@ -1263,3 +1263,25 @@ input::placeholder { color: #626880; }
   .ach-counter-val { font-size: 22px; }
   .sfx-actions { grid-template-columns: 1fr; }
 }
+
+.acc-error {
+  font-size: 12.3px;
+  line-height: 1.45;
+  color: #ffb4a8;
+  background: rgba(255, 96, 76, 0.1);
+  border: 1px solid rgba(255, 96, 76, 0.28);
+  border-radius: 10px;
+  padding: 9px 11px;
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+
+.acc-btn-second {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.acc-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

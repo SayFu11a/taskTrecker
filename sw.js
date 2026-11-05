@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v2";
+const VERSION = "vp-tracker-v4";
 const SHELL = [
   "./",
   "./index.html",
@@ -38,8 +38,12 @@ self.addEventListener("activate", (event) => {
 });
 
 /* Стратегии:
-   - навигация: сначала сеть, при офлайне — кэш (чтобы обновления прилетали сразу);
-   - остальное: сначала кэш, потом сеть (мгновенный запуск). */
+   - сам этот файл никогда не перехватываем: иначе исправленный воркер
+     не подхватится, пока старый не решит обновиться;
+   - навигация и код (html/js/css/json): сначала сеть, при офлайне — кэш.
+     Кэш навсегда тут был ошибкой: правка sync.js не доезжала до устройства,
+     пока вручную не поднимешь VERSION;
+   - картинки и шрифты: сначала кэш (они не меняются, экономим трафик). */
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -47,19 +51,39 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // Supabase и шрифты не трогаем
 
-  if (req.mode === "navigate") {
+  /* Сам воркер отдаёт браузер, не мы */
+  if (url.pathname.endsWith("/sw.js")) return;
+
+  /* Код и разметка меняются при каждом релизе — их всегда тянем из сети,
+     а кэш держим только как офлайн-подстраховку. */
+  const dynamic =
+    req.mode === "navigate" ||
+    /\.(?:html|js|css|json)$/.test(url.pathname) ||
+    url.pathname === "/" ||
+    url.pathname.endsWith("/");
+
+  if (dynamic) {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put("./index.html", copy)).catch(() => {});
+          if (res && res.ok) {
+            const copy = res.clone();
+            const key = req.mode === "navigate" ? "./index.html" : req;
+            caches.open(VERSION).then((c) => c.put(key, copy)).catch(() => {});
+          }
           return res;
         })
-        .catch(() => caches.match("./index.html").then((r) => r || caches.match("./")))
+        .catch(() =>
+          caches
+            .match(req)
+            .then((r) => r || caches.match("./index.html"))
+            .then((r) => r || caches.match("./"))
+        )
     );
     return;
   }
 
+  /* Картинки и прочая статика — сначала кэш */
   event.respondWith(
     caches.match(req).then(
       (hit) =>

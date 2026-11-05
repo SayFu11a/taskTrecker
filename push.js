@@ -174,7 +174,14 @@ function renderPushBox() {
 async function initServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register("./sw.js", { scope: "./" });
+    const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
+
+    /* Раз в загрузку и при возврате во вкладку — узнать, нет ли новой версии.
+       Иначе исправленный воркер может ждать сутки. */
+    reg.update().catch(() => {});
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) reg.update().catch(() => {});
+    });
 
     /* Если пришло новое обновление и оно активировалось — мягко сообщаем */
     navigator.serviceWorker.addEventListener("controllerchange", () => {
