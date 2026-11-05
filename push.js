@@ -5,9 +5,12 @@
 
 const PUSH_KEY = "vp-tracker-push";
 
-/* Публичный VAPID-ключ из Supabase (Edge Function → generate-vapid), формат base64url.
+/* Публичный VAPID-ключ. Пара ключей лежит в Supabase → Edge Functions → Secrets
+   (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY). Публичный можно показывать — он и должен
+   быть в коде; приватный в репозиторий не попадает никогда.
    Пусто — уведомления не включатся, интерфейс честно об этом скажет. */
-const VAPID_PUBLIC_KEY = "";
+const VAPID_PUBLIC_KEY =
+  "BPc_LP9adolrmzAKmPrTR5sBRiOgJ903LG6-rpcF_oP9NorStA6uSTwTB-j6UzEeMS70cHK9xJlYyk9OHIgsJkg";
 
 function pushSupported() {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -70,26 +73,38 @@ async function enablePush() {
       applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
     });
 
-    localStorage.setItem(PUSH_KEY, "on");
-
-    /* Отправляем подписку на сервер, если он настроен. */
-    if (typeof sb !== "undefined" && sb && typeof session !== "undefined" && session) {
-      await sb.from("push_subscriptions").upsert(
-        {
-          user_id: session.user.id,
-          endpoint: sub.endpoint,
-          subscription: sub.toJSON(),
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "endpoint" }
-      );
+    /* Без входа подписка останется только на этом устройстве:
+       сервер не знает, кому слать, поэтому напоминания не придут. */
+    if (!(typeof sb !== "undefined" && sb && typeof session !== "undefined" && session)) {
+      await sub.unsubscribe();
+      toast("Сначала войди через Google — без аккаунта сервер не знает, кому отправлять напоминания.");
+      return;
     }
 
+    const { error } = await sb.from("push_subscriptions").upsert(
+      {
+        user_id: session.user.id,
+        endpoint: sub.endpoint,
+        subscription: sub.toJSON(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "endpoint" }
+    );
+
+    if (error) {
+      console.warn("Подписка не сохранилась на сервере", error);
+      await sub.unsubscribe();
+      toast("Подписка не сохранилась на сервере: " + error.message);
+      return;
+    }
+
+    localStorage.setItem(PUSH_KEY, "on");
     renderPushBox();
-    toast("Уведомления включены.");
+    toast("Уведомления включены. Напомню в начале следующего блока.");
   } catch (e) {
     console.warn("Подписка не удалась", e);
-    toast("Не получилось подписаться на уведомления.");
+    /* Самая частая причина — ключ и сервер не совпадают (например, ключи перегенерировали). */
+    toast("Не получилось подписаться: " + (e && e.message ? e.message : "неизвестная ошибка"));
   }
 }
 
@@ -127,12 +142,49 @@ function renderPushBox() {
   const root = document.getElementById("pushBox");
   if (!root) return;
 
+  /* Пока Supabase-клиент не готов — не пугаем человека «выключено»,
+     просто ждём: состояние зависит от входа в аккаунт. */
+  if (typeof authPending !== "undefined" && authPending) {
+    root.innerHTML = `<div class="acc-sub">Проверяю уведомления…</div>`;
+    return;
+  }
+
   if (!pushSupported()) {
     root.innerHTML = `<div class="acc-sub">Браузер не поддерживает уведомления. На iPhone нужно iOS 16.4 или новее.</div>`;
     return;
   }
 
   const enabled = pushEnabledLocally() && Notification.permission === "granted";
+
+  /* Ключ не вписан — честно говорим, что настраивать нечего. */
+  if (!VAPID_PUBLIC_KEY) {
+    root.innerHTML = `
+      <div class="acc-row">
+        <span class="acc-dot off"></span>
+        <div>
+          <div class="acc-title">Уведомления не настроены</div>
+          <div class="acc-sub">В коде нет VAPID-ключа — сервер не может отправлять напоминания.</div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  /* Разрешение запрещено в браузере — кнопка «включить» тут бессильна. */
+  if (Notification.permission === "denied") {
+    root.innerHTML = `
+      <div class="acc-row">
+        <span class="acc-dot off"></span>
+        <div>
+          <div class="acc-title">Уведомления запрещены</div>
+          <div class="acc-sub">В настройках сайта в браузере стоит «блокировать». Разреши уведомления для ${location.host} — и нажми «Проверить снова».</div>
+        </div>
+      </div>
+      <button class="ghost-btn acc-btn" id="pushRetry">Проверить снова</button>`;
+
+    const retry = document.getElementById("pushRetry");
+    if (retry) retry.addEventListener("click", () => location.reload());
+    return;
+  }
 
   if (isIOS() && !isStandalone()) {
     root.innerHTML = `
@@ -149,6 +201,9 @@ function renderPushBox() {
     return;
   }
 
+  /* Без входа подписка не дойдёт до сервера — говорим это до нажатия, а не после. */
+  const signedIn = typeof session !== "undefined" && Boolean(session);
+
   root.innerHTML = `
     <div class="acc-row">
       <span class="acc-dot ${enabled ? "on" : "off"}"></span>
@@ -157,16 +212,63 @@ function renderPushBox() {
         <div class="acc-sub">${
           enabled
             ? "Напомню, когда подойдёт время блока. Звук — системный, свой в вебе задать нельзя."
-            : "Напоминание о блоке приходит на телефон, даже если трекер закрыт."
+            : signedIn
+              ? "Напоминание о блоке приходит на телефон, даже если трекер закрыт."
+              : "Сначала войди через Google выше — напоминания отправляются на аккаунт."
         }</div>
       </div>
     </div>
-    <button class="${enabled ? "ghost-btn" : "primary-btn"} acc-btn" id="pushToggle">
-      ${enabled ? "Выключить" : "Включить уведомления"}
-    </button>`;
+    <div class="push-actions">
+      <button class="${enabled ? "ghost-btn" : "primary-btn"} acc-btn" id="pushToggle" ${!enabled && !signedIn ? "disabled" : ""}>
+        ${enabled ? "Выключить" : "Включить уведомления"}
+      </button>
+      ${enabled ? '<button class="ghost-btn acc-btn" id="pushTest">Проверить</button>' : ""}
+    </div>`;
 
   const btn = document.getElementById("pushToggle");
   if (btn) btn.addEventListener("click", () => (enabled ? disablePush() : enablePush()));
+
+  const test = document.getElementById("pushTest");
+  if (test) test.addEventListener("click", () => sendTestPush(test));
+}
+
+/* Тестовое уведомление: дёргаем функцию с токеном пользователя —
+   сервер проверит токен и отправит push только этому аккаунту. */
+async function sendTestPush(button) {
+  button.disabled = true;
+  button.textContent = "Отправляю…";
+  try {
+    if (!(typeof sb !== "undefined" && sb && session)) {
+      toast("Сначала войди через Google — без аккаунта тестовое уведомление не отправить.");
+      return;
+    }
+    const { data } = await sb.auth.getSession();
+    const token = data && data.session ? data.session.access_token : null;
+    if (!token) {
+      toast("Сессия истекла. Войди заново.");
+      return;
+    }
+
+    const url = `${SUPABASE_URL}/functions/v1/send-reminders?force=1&test=1`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}",
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      toast(`Сервер ответил ${res.status}: ${text.slice(0, 120)}`);
+      return;
+    }
+    toast("Отправил. Если уведомление не пришло — проверь системные настройки уведомлений для браузера.");
+  } catch (e) {
+    console.warn("Тестовый push не ушёл", e);
+    toast("Не удалось отправить тестовое уведомление: " + (e && e.message ? e.message : "ошибка сети"));
+  } finally {
+    button.disabled = false;
+    button.textContent = "Проверить";
+  }
 }
 
 /* ─────────── регистрация service worker ─────────── */

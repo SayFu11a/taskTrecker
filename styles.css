@@ -1285,3 +1285,42 @@ input::placeholder { color: #626880; }
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ─────────── предупреждение о будущей дате ─────────── */
+
+.future-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 122, 138, 0.45);
+  background: rgba(255, 122, 138, 0.08);
+  color: #ffc5cc;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.future-note b { color: #ffd9de; font-weight: 700; }
+
+/* бейдж «будущее» рядом с датой дня */
+.future-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffc5cc;
+  background: rgba(255, 122, 138, 0.16);
+  border: 1px solid rgba(255, 122, 138, 0.4);
+  vertical-align: middle;
+}
+
+/* блоки в будущем дне — приглушены, но кликабельны */
+.block.future .block-desc { opacity: 0.75; }
+
+/* push: кнопка «включить» + отдельная «проверить» */
+.push-actions { display: grid; gap: 8px; }
+.push-actions:has(#pushTest) { grid-template-columns: 1fr auto; }
+.push-actions .acc-btn { width: auto; height: auto; padding: 10px 14px; font-size: 13px; }
