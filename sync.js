@@ -51,6 +51,7 @@ async function initSync() {
     sb.auth.onAuthStateChange((event, newSession) => {
       session = newSession;
       renderAccount();
+      if (typeof renderPushBox === "function") renderPushBox();
       if (event === "SIGNED_IN") pullThenPush();
     });
 
@@ -71,6 +72,7 @@ async function initSync() {
   } finally {
     authPending = false;
     renderAccount();
+    if (typeof renderPushBox === "function") renderPushBox();
   }
 }
 
@@ -102,6 +104,7 @@ async function signOut() {
   await sb.auth.signOut();
   session = null;
   renderAccount();
+  if (typeof renderPushBox === "function") renderPushBox();
   toast("Вышел из аккаунта. Данные остались на этом устройстве.");
 }
 

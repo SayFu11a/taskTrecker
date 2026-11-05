@@ -55,6 +55,12 @@ function todayKey() {
   return keyOf(d);
 }
 
+/* Дата позже сегодняшней. Сравнение строк безопасно: формат YYYY-MM-DD
+   сортируется лексикографически так же, как календарно. */
+function isFutureDate(key) {
+  return typeof key === "string" && key > todayKey();
+}
+
 function keyOf(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -124,7 +130,8 @@ function renderBlocks() {
 
   BLOCKS.forEach((b) => {
     const lvl = data[b.id];
-    const card = el("div", "block" + (lvl ? " done" : ""));
+    const future = isFutureDate(selectedDate);
+    const card = el("div", "block" + (lvl ? " done" : "") + (future ? " future" : ""));
     card.dataset.id = b.id;
 
     const top = el("div", "block-top");
@@ -153,6 +160,11 @@ function renderBlocks() {
         renderAll();
         if (d[b.id]) {
           play(level === "min" ? "mark" : "markGood");
+          /* Первая отметка в будущем дне — честно говорим, что попадёт в статистику. */
+          if (isFutureDate(selectedDate)) {
+            toast("Отмечено на будущую дату. Пока этот день не наступил, статистика считает его закрытым.");
+            return;
+          }
           const msgs = {
             min: "Минимум засчитан. Этого уже достаточно.",
             norm: "Норма дня. Хорошая работа.",
@@ -227,6 +239,31 @@ function renderRing() {
   else if (target === 1) text = "Минимум — это победа, а не полумера.";
   else text = `Сделано блоков: ${done} из ${BLOCKS.length}`;
   document.getElementById("ringText").textContent = text;
+
+  renderFutureNote();
+}
+
+/* Заметка над блоком дня: дата ещё не наступила. Отмечать можно,
+   но человек должен понимать, что статистика посчитает день закрытым. */
+function renderFutureNote() {
+  const box = document.getElementById("futureNote");
+  if (!box) return;
+
+  if (!isFutureDate(selectedDate)) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+
+  const today = dateOf(todayKey());
+  const target = dateOf(selectedDate);
+  const days = Math.round((target - today) / 86400000);
+  const when = days === 1 ? "завтра" : `через ${days} ${plural(days, "день", "дня", "дней")}`;
+
+  box.hidden = false;
+  box.innerHTML =
+    `⚠️ <b>Будущая дата</b> — ${when} (${humanDate.format(target)}). ` +
+    `Отметки здесь разрешены, но статистика засчитает этот день как закрытый ещё до его начала.`;
 }
 
 /* ─────────────── режим дня ─────────────── */
@@ -655,6 +692,17 @@ function renderTimeline() {
     });
     switcher.appendChild(b);
   });
+
+  /* День ещё не наступил — прямо в расписании говорим об этом, а не только в кольце. */
+  if (isFutureDate(selectedDate)) {
+    const badge = el("div", "future-note");
+    badge.innerHTML =
+      `⚠️ Это <b>будущий день</b> (${humanDate.format(dateOf(selectedDate))}). ` +
+      `Расписание можно смотреть заранее, но отметки пойдут в статистику.`;
+    badge.style.marginBottom = "10px";
+    root.appendChild(badge);
+  }
+
   root.appendChild(switcher);
 
   timeline.forEach((slot, i) => {
