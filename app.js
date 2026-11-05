@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v6";
+const BUILD_LABEL = "сборка v7";
 
 const DEFAULT_STATE = {
   days: {},        // { "2026-11-04": { ulbi: "norm", ... } }
@@ -11,6 +11,8 @@ const DEFAULT_STATE = {
   gym: {},         // { "1": { mon: true, wed: false, fri: true } }
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
+  hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — минуты вручную/таймером
+  timer: null,      // { block, date, startedAt } — идёт прямо сейчас
   scheduleView: "detail", // "detail" | "coarse"
   achievements: {}, // { id: ISO-дата открытия }
   meta: {},         // { "2026-11-04": timestamp последнего изменения } — для синка
@@ -72,6 +74,86 @@ function keyOf(d) {
 function dateOf(key) {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(y, m - 1, d);
+}
+
+/* ─────────── время: минуты ↔ «1 ч 20 мин» ─────────── */
+
+function fmtMinutes(min) {
+  const m = Math.max(0, Math.round(min || 0));
+  if (!m) return "0 мин";
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (!h) return `${rest} мин`;
+  if (!rest) return `${h} ч`;
+  return `${h} ч ${rest} мин`;
+}
+
+/* Компактно — для плашек и итогов: «2:35» */
+function fmtShort(min) {
+  const m = Math.max(0, Math.round(min || 0));
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+}
+
+function hoursFor(dateKey, blockId) {
+  const day = (state.hours || {})[dateKey] || {};
+  return blockId ? day[blockId] || 0 : Object.values(day).reduce((a, b) => a + b, 0);
+}
+
+function addHours(dateKey, blockId, deltaMin) {
+  if (!state.hours) state.hours = {};
+  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
+  const next = Math.max(0, (day[blockId] || 0) + deltaMin);
+  if (next === 0) delete day[blockId];
+  else day[blockId] = next;
+  if (!Object.keys(day).length) delete state.hours[dateKey];
+  touchDay(dateKey);
+  save();
+}
+
+/* таймер */
+function timerBlock() {
+  const t = state.timer;
+  if (!t) return null;
+  return t;
+}
+
+function timerElapsedMin() {
+  const t = timerBlock();
+  if (!t) return 0;
+  return Math.max(0, Math.floor((Date.now() - t.startedAt) / 60000));
+}
+
+function startTimer(blockId) {
+  if (state.timer) {
+    toast("Уже идёт таймер по блоку «" + blockName(state.timer.block) + "». Сначала останови его.");
+    return;
+  }
+  state.timer = { block: blockId, date: selectedDate, startedAt: Date.now() };
+  save();
+  renderBlocks();
+  toast("Таймер пошёл: " + blockName(blockId));
+  play("tick");
+}
+
+function stopTimer() {
+  const t = state.timer;
+  if (!t) return;
+  const min = Math.round((Date.now() - t.startedAt) / 60000);
+  state.timer = null;
+  if (min >= 1) {
+    addHours(t.date, t.block, min);
+    toast(`Записано ${fmtMinutes(min)} в «${blockName(t.block)}».`);
+    play("markGood");
+  } else {
+    save();
+    toast("Меньше минуты — не записал.");
+  }
+  renderAll();
+}
+
+function blockName(id) {
+  const b = BLOCKS.find((x) => x.id === id);
+  return b ? b.name : id;
 }
 
 function shiftDay(key, delta) {
@@ -193,6 +275,9 @@ function renderBlocks() {
       else tipsState.delete(b.id);
     });
 
+    /* ── учёт времени: своя строка под уровнями, не мешает им ── */
+    card.appendChild(renderTimeRow(b));
+
     const meta = el("div", "block-meta");
     meta.style.cssText = "display:flex;align-items:center;margin-top:8px";
     meta.appendChild(toggle);
@@ -201,6 +286,77 @@ function renderBlocks() {
 
     blocksRoot.appendChild(card);
   });
+}
+
+/* Строка «сколько реально потратил» + быстрые кнопки и таймер.
+   Держим одной полосой: на телефоне она переносится, на десктопе — в ряд. */
+function renderTimeRow(b) {
+  const row = el("div", "time-row");
+  const spent = hoursFor(selectedDate, b.id);
+  const running = state.timer && state.timer.block === b.id;
+
+  /* идущий таймер показываем живым счётчиком поверх записанного времени */
+  const live = running ? timerElapsedMin() : 0;
+  const shown = spent + live;
+  const value = el("div", "time-value" + (shown ? " has" : "") + (running ? " ticking" : ""),
+    fmtMinutes(shown));
+  value.title = running
+    ? "Идёт таймер. Нажми «стоп», чтобы записать."
+    : "Сколько реально потрачено на этот блок";
+
+  const quick = el("div", "time-quick");
+  [15, 30, 60].forEach((min) => {
+    const btn = el("button", "time-btn", "+" + (min === 60 ? "1 ч" : min + " мин"));
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      addHours(selectedDate, b.id, min);
+      renderAll();
+      play("tick");
+      toast(`${b.name}: +${fmtMinutes(min)}. Всего ${fmtMinutes(hoursFor(selectedDate, b.id))}.`);
+    });
+    quick.appendChild(btn);
+  });
+
+  /* ручной ввод — по клику раскрывается поле, чтобы не занимать место всегда */
+  const manualBtn = el("button", "time-btn time-btn-ghost", "своё");
+  manualBtn.type = "button";
+  manualBtn.title = "Ввести своё время";
+  manualBtn.addEventListener("click", () => {
+    const input = prompt("Сколько минут записать?\nМожно с минусом, чтобы убрать: -15", "45");
+    if (input === null) return;
+    const min = parseInt(String(input).replace(/[^0-9-]/g, ""), 10);
+    if (!Number.isFinite(min) || min === 0) {
+      toast("Не понял число. Напиши, например, 45 или -15.");
+      return;
+    }
+    addHours(selectedDate, b.id, min);
+    renderAll();
+    play(min > 0 ? "mark" : "tick");
+    toast(`${b.name}: ${min > 0 ? "+" : ""}${min} мин. Всего ${fmtMinutes(hoursFor(selectedDate, b.id))}.`);
+  });
+  quick.appendChild(manualBtn);
+
+  const timerBtn = el("button", "time-btn time-start" + (running ? " running" : ""), running ? "■ стоп" : "▶ старт");
+  timerBtn.type = "button";
+  timerBtn.title = running ? "Остановить таймер" : "Запустить таймер для этого блока";
+  timerBtn.addEventListener("click", () => (running ? stopTimer() : startTimer(b.id)));
+
+  const right = el("div", "time-right");
+  right.appendChild(quick);
+  right.appendChild(timerBtn);
+
+  row.appendChild(el("span", "time-label", "⏱"));
+  row.appendChild(value);
+  row.appendChild(right);
+
+  /* таймер, идущий в другом блоке, не должен молчать */
+  if (state.timer && !running) {
+    row.appendChild(
+      el("span", "time-other", `таймер идёт в «${blockName(state.timer.block)}»`)
+    );
+  }
+
+  return row;
 }
 
 /* ─────────────── прогресс-кольцо ─────────────── */
@@ -744,6 +900,22 @@ function renderProgress() {
     return Object.values(d).length > 0 && Object.values(d).every((v) => v === "min");
   }).length;
 
+  const todayMin = hoursFor(todayKey());
+  const allMin = totalHoursAllTime();
+  const weekMin = lastNKeys(7).reduce((sum, k) => sum + hoursFor(k), 0);
+
+  document.getElementById("hoursGrid").innerHTML = `
+    <div class="stat stat-hours">
+      <div class="stat-val">${fmtShort(todayMin)}<small>ч</small></div>
+      <div class="stat-label">сегодня на работу</div>
+      <div class="stat-sub">${todayMin ? fmtMinutes(todayMin) : "пока ничего не отмечено"}</div>
+    </div>
+    <div class="stat stat-hours">
+      <div class="stat-val">${fmtShort(allMin)}<small>ч</small></div>
+      <div class="stat-label">всего за всё время</div>
+      <div class="stat-sub">${allMin ? fmtMinutes(allMin) + " · за 7 дней " + fmtShort(weekMin) + " ч" : "счёт начнётся с первой отметки"}</div>
+    </div>`;
+
   document.getElementById("statGrid").innerHTML = `
     <div class="stat"><div class="stat-val">${cd}</div><div class="stat-label">дней закрыто</div></div>
     <div class="stat"><div class="stat-val">${streak()}</div><div class="stat-label">текущая серия</div></div>
@@ -755,6 +927,23 @@ function renderProgress() {
   renderHeatmap();
   renderBars();
   renderLeetcode();
+}
+
+/* Всего часов за всё время — по всем дням, что есть в state.hours */
+function totalHoursAllTime() {
+  return Object.keys(state.hours || {}).reduce((sum, k) => sum + hoursFor(k), 0);
+}
+
+/* Серия дней с реальной работой (часы > 0) — не путать с серией закрытых дней */
+function hoursStreak() {
+  let n = 0;
+  let cursor = todayKey();
+  if (!hoursFor(cursor)) cursor = shiftDay(cursor, -1);
+  while (hoursFor(cursor) > 0) {
+    n++;
+    cursor = shiftDay(cursor, -1);
+  }
+  return n;
 }
 
 function lastNKeys(n) {
@@ -981,6 +1170,18 @@ renderPushBox();
 
 initServiceWorker().then(refreshPushState);
 initSync();
+
+/* идущий таймер обновляем раз в секунду — только цифру, без полной перерисовки */
+function tickTimerLabel() {
+  if (!state.timer) return;
+  if (state.timer.date !== selectedDate) return;
+  const card = document.querySelector(`.block[data-id="${state.timer.block}"] .time-value`);
+  if (!card) return;
+  const spent = hoursFor(selectedDate, state.timer.block);
+  card.textContent = fmtMinutes(spent + timerElapsedMin());
+  card.classList.add("has", "ticking");
+}
+setInterval(tickTimerLabel, 1000);
 
 /* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
 setInterval(() => {

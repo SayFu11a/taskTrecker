@@ -122,6 +122,7 @@ function stateToRows(userId) {
     user_id: userId,
     date,
     blocks: state.days[date],
+    hours: (state.hours || {})[date] || {},
     mode: (state.modes || {})[date] || null,
     updated_at: new Date(meta[date] || Date.now()).toISOString(),
   }));
@@ -141,6 +142,11 @@ function mergeRowsIntoState(rows) {
     if (remoteTs > localTs) {
       state.days[row.date] = row.blocks || {};
       if (row.mode) state.modes[row.date] = row.mode;
+      /* часы приходят отдельным полем; старые строки его не содержат */
+      if (row.hours && Object.keys(row.hours).length) {
+        state.hours = state.hours || {};
+        state.hours[row.date] = row.hours;
+      }
       state.meta[row.date] = remoteTs;
     }
   });
@@ -154,7 +160,7 @@ async function pullThenPush() {
   try {
     const { data, error } = await sb
       .from("days")
-      .select("date,blocks,mode,updated_at")
+      .select("date,blocks,hours,mode,updated_at")
       .eq("user_id", session.user.id);
 
     if (error) throw error;
