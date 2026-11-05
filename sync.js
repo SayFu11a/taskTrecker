@@ -46,16 +46,22 @@ async function initSync() {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
 
-    await reportOauthError();
-
-    const { data } = await sb.auth.getSession();
-    session = data.session || null;
-
+    /* Подписку ставим ДО обмена кода: иначе SIGNED_IN от обмена
+       пройдёт мимо обработчика и синхронизация не запустится. */
     sb.auth.onAuthStateChange((event, newSession) => {
       session = newSession;
       renderAccount();
       if (event === "SIGNED_IN") pullThenPush();
     });
+
+    await reportOauthError();
+
+    /* Если в адресе остался code — довершаем вход сами: автообмен
+       мог сорваться, а повторный запрос со свежим состоянием проходит. */
+    await exchangeCodeManually();
+
+    const { data } = await sb.auth.getSession();
+    session = data.session || null;
 
     if (session) await pullThenPush();
     else if (hasLocalData()) await maybeOfferMigration();
@@ -261,30 +267,71 @@ document.addEventListener("visibilitychange", () => {
 /* Supabase присылает проблему в адресе: #error=access_denied&error_description=…
    Без этого человек видит «ничего не произошло» и не понимает, что делать. */
 async function reportOauthError() {
-  const raw = window.location.hash || window.location.search || "";
-  if (!/error/.test(raw)) return false;
+  /* Supabase кладёт ошибку в query (?error=…), старые версии — в хэш (#error=…).
+     Проверяем оба, иначе причина молча теряется. */
+  const fromSearch = new URLSearchParams(window.location.search || "");
+  const fromHash = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
 
-  const params = new URLSearchParams(raw.replace(/^#/, "?"));
-  const code = params.get("error") || "";
-  const desc = params.get("error_description") || "";
+  const pick = (key) => fromSearch.get(key) || fromHash.get(key) || "";
+  const code = pick("error");           // server_error, access_denied, …
+  const errorCode = pick("error_code"); // unexpected_failure, … — точнее
+  const desc = pick("error_description");
+
+  if (!code && !desc) return false;
 
   const readable = {
     access_denied: "Вход отменён на стороне Google.",
-    server_error: "Supabase не смог завершить вход.",
+    server_error: "Supabase не смог завершить обмен кода с Google.",
     unauthorized_client: "Google-клиент настроен неверно: адрес возврата не разрешён.",
     invalid_request: "Некорректный запрос к Supabase — чаще всего из-за Site URL.",
   };
 
-  const hint = readable[code] || desc.replace(/\+/g, " ") || code;
-  lastAuthError = { code, desc: desc.replace(/\+/g, " ") };
+  let hint = readable[code] || desc.replace(/\+/g, " ") || code;
+
+  /* Обмен кода не удался — это почти всегда несовпадение Client Secret
+     или адреса возврата в Google Console. Подсказываем, где смотреть. */
+  if (/exchange external code/i.test(desc)) {
+    hint =
+      "Supabase не смог обменять код с Google. Проверь в Supabase → Providers → Google: " +
+      "Client ID и Client Secret скопированы без пробелов и от того же OAuth-клиента, " +
+      "и что в Google Console среди Authorized redirect URIs есть адрес вида " +
+      "https://dzgututxrglgvcvduqqx.supabase.co/auth/v1/callback";
+  }
+
+  lastAuthError = { code, errorCode, desc: desc.replace(/\+/g, " ") };
   toast("Вход не удался: " + hint);
 
-  /* чистим адрес, чтобы ошибка не всплывала при каждой перезагрузке */
-  if (window.history && window.history.replaceState) {
+  /* Чистим адрес, чтобы ошибка не всплывала при каждой перезагрузке — но
+     никогда не трогаем code: Supabase может отдать его вместе с ошибкой,
+     и вычистив адрес мы теряем единственный способ довершить вход. */
+  const params = new URLSearchParams(window.location.search || "");
+  if (!params.get("code") && window.history && window.history.replaceState) {
     window.history.replaceState({}, document.title, window.location.pathname);
   }
 
   return true;
+}
+
+/* ─────────── ручной обмен кода (если автообмен сорвался) ─────────── */
+
+/* Supabase вернул code в адрес, но сам сессию не создал — например обмен
+   сорвался на сервере. Клиент умеет обменять его сам, со свежим запросом. */
+async function exchangeCodeManually() {
+  const params = new URLSearchParams(window.location.search || "");
+  const code = params.get("code");
+  if (!code || !sb) return false;
+
+  try {
+    const { error } = await sb.auth.exchangeCodeForSession(code);
+    if (error) throw error;
+
+    window.history.replaceState({}, document.title, window.location.pathname);
+    toast("Вошёл. Синхронизация включается.");
+    return true;
+  } catch (e) {
+    console.warn("Ручной обмен кода не удался", e);
+    return false;
+  }
 }
 
 /* ─────────── интерфейс ─────────── */
@@ -323,7 +370,7 @@ function renderAccount() {
     }
     const errorNote = lastAuthError
       ? `<div class="acc-error">Предыдущая попытка не удалась: ${
-          lastAuthError.code || "ошибка"
+          lastAuthError.errorCode || lastAuthError.code || "ошибка"
         }${lastAuthError.desc ? " — " + lastAuthError.desc : ""}</div>`
       : "";
 

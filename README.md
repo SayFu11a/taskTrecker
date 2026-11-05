@@ -118,6 +118,40 @@ python3 -m http.server 8100
 Если адрес возврата не разрешён, теперь видно причину: на экране аккаунта
 появляется текст ошибки, а не тишина.
 
+### 3.2. Ошибка «Unable to exchange external code»
+
+Полный текст: `error=server_error&error_code=unexpected_failure` и
+`error_description=Unable to exchange external code: 4/0A…`.
+
+Что это значит: Google успешно вернул человека в Supabase (шаг с кодом прошёл),
+а Supabase не смог обменять этот код на токен у Google. Почти всегда причина одна
+из двух — **неверный Client Secret** или **несовпадающий адрес возврата**.
+
+Проверить по порядку:
+
+1. **Supabase → Authentication → Providers → Google.** Поля `Client ID` и
+   `Client Secret` должны быть от **одного и того же** OAuth-клиента в Google Cloud.
+   Секрет копируется целиком, без пробелов по краям. Если секрет когда-то
+   перевыпускали (`Reset secret`) — старый сразу перестаёт работать.
+2. **Google Cloud → APIs & Services → Credentials → твой OAuth client.**
+   В `Authorized redirect URIs` должен быть **ровно** этот адрес:
+
+   ```
+   https://dzgututxrglgvcvduqqx.supabase.co/auth/v1/callback
+   ```
+
+   Точный адрес Supabase показывает сам в настройках провайдера — копировать оттуда,
+   а не набирать руками. Опечатка в одной букве даёт именно эту ошибку.
+3. **OAuth consent screen** должен быть заполнен, а если приложение в статусе
+   `Testing` — твой Google-аккаунт добавлен в `Test users`.
+
+После исправления секрета в Supabase вход начинает работать сразу, пересобирать
+сайт не нужно: обмен идёт на стороне Supabase.
+
+Нюанс кода: если Supabase всё же вернул `code` в адрес, сайт пытается обменять его
+сам через `exchangeCodeForSession`. Это спасает, когда автообмен сорвался разово,
+но не лечит неверный секрет — тогда ошибка останется.
+
 ### 4. Вписать ключи в код
 
 **Project Settings → API** → скопировать `Project URL` и `anon public` key:
