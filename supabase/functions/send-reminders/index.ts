@@ -55,6 +55,8 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const dry = url.searchParams.get("dry") === "1";
   const isTest = url.searchParams.get("test") === "1";
+  const force = url.searchParams.get("force") === "1";
+  const slotParam = url.searchParams.get("slot");
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -83,12 +85,16 @@ Deno.serve(async (req) => {
   const weekday = (nowMsk.getUTCDay() + 6) % 7;
   const dateKey = `${nowMsk.getUTCFullYear()}-${pad(nowMsk.getUTCMonth() + 1)}-${pad(nowMsk.getUTCDate())}`;
 
-  /* Воскресенье — выходной */
-  if (weekday === 6 && !isTest && !dry) return json({ sent: 0, reason: "воскресенье" });
+  /* Воскресенье — выходной (ручной прогон и тест — можно) */
+  if (weekday === 6 && !isTest && !dry && !force) return json({ sent: 0, reason: "воскресенье" });
 
-  const slot = isTest
+  let slot = isTest
     ? TEST_SLOT
     : SLOTS.find((s) => mins >= minutesOf(s.from) && mins < minutesOf(s.to));
+
+  if (force && !isTest) {
+    slot = (slotParam ? SLOTS.find((s) => s.from === slotParam) : slot) ?? SLOTS[0];
+  }
 
   if (!slot) return json({ sent: 0, reason: "вне активных блоков", mins });
 
