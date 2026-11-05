@@ -8,6 +8,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<meta name="theme-color" content="#08090d" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Трекер" />
+<meta name="mobile-web-app-capable" content="yes" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -50,6 +58,7 @@
   <button class="tab" data-tab="gym" role="tab">Тренировки</button>
   <button class="tab" data-tab="progress" role="tab">Прогресс</button>
   <button class="tab" data-tab="rules" role="tab">Правила</button>
+  <button class="tab" data-tab="awards" role="tab">Награды</button>
 </nav>
 
 <main class="wrap">
@@ -230,11 +239,53 @@
     </p>
   </section>
 
+  <!-- ─────────── НАГРАДЫ ─────────── -->
+  <section class="panel" id="panel-awards">
+    <div class="section-head">
+      <h2>Достижения</h2>
+      <p>Закрывается само: как только условие выполнено, звучит короткий сигнал и карточка открывается.</p>
+    </div>
+
+    <div class="ach-top">
+      <div class="ach-counter card">
+        <div class="ach-counter-val" id="achCount">0/0</div>
+        <div class="ach-counter-label">открыто</div>
+      </div>
+      <div class="card ach-hint-card">
+        <p class="ach-hint" id="achHint"></p>
+      </div>
+    </div>
+
+    <div class="stat-grid" id="achStats"></div>
+    <div class="ach-grid" id="achievements"></div>
+
+    <div class="section-head">
+      <h2>Аккаунт и устройства</h2>
+      <p>Один аккаунт — телефон и компьютер видят одни и те же отметки.</p>
+    </div>
+    <div class="card" id="accountBox"></div>
+
+    <div class="section-head">
+      <h2>Звук</h2>
+    </div>
+    <div class="card" id="sfxBox"></div>
+
+    <div class="section-head">
+      <h2>Уведомления</h2>
+      <p>Напоминание придёт, даже если трекер закрыт. На iPhone — только после установки на экран «Домой».</p>
+    </div>
+    <div class="card" id="pushBox"></div>
+  </section>
+
 </main>
 
 <div class="toast" id="toast"></div>
 
 <script src="data.js"></script>
+<script src="sound.js"></script>
+<script src="achievements.js"></script>
+<script src="sync.js"></script>
+<script src="push.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

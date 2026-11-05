@@ -9,6 +9,8 @@ const DEFAULT_STATE = {
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
   scheduleView: "detail", // "detail" | "coarse"
+  achievements: {}, // { id: ISO-дата открытия }
+  meta: {},         // { "2026-11-04": timestamp последнего изменения } — для синка
 };
 
 /* structuredClone есть не везде (Safari < 15.4) — без него падал весь трекер */
@@ -33,12 +35,19 @@ function load() {
   }
 }
 
-function save() {
+/* Запись только в браузер — используется синхронизацией, чтобы не было цикла. */
+function saveLocalOnly() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
   } catch (e) {
     console.warn("Не удалось сохранить", e);
   }
+}
+
+function save() {
+  saveLocalOnly();
+  if (typeof refreshAchievements === "function") refreshAchievements();
+  if (typeof syncSoon === "function") syncSoon();
 }
 
 function todayKey() {
@@ -91,6 +100,13 @@ function dayData(key) {
   return state.days[key];
 }
 
+/* Отметка времени изменения дня — по ней синхронизация решает,
+   чья версия свежее (телефон или компьютер). */
+function touchDay(key) {
+  if (!state.meta) state.meta = {};
+  state.meta[key] = Date.now();
+}
+
 function modeFor(key) {
   return state.modes[key] || "norm";
 }
@@ -132,9 +148,11 @@ function renderBlocks() {
         const d = dayData(selectedDate);
         if (d[b.id] === level) delete d[b.id];
         else d[b.id] = level;
+        touchDay(selectedDate);
         save();
         renderAll();
         if (d[b.id]) {
+          play(level === "min" ? "mark" : "markGood");
           const msgs = {
             min: "Минимум засчитан. Этого уже достаточно.",
             norm: "Норма дня. Хорошая работа.",
@@ -172,6 +190,9 @@ function renderBlocks() {
 
 /* ─────────────── прогресс-кольцо ─────────────── */
 
+/* даты, по которым звук «день закрыт» уже сыграл */
+const closedCelebrated = new Set();
+
 function dayScore(key) {
   const data = state.days[key] || {};
   const target = MODE_TARGET[modeFor(key)];
@@ -184,6 +205,14 @@ function dayScore(key) {
 function renderRing() {
   const { pct, done, target } = dayScore(selectedDate);
   const C = 2 * Math.PI * 52;
+
+  /* день закрыт впервые — короткое арпеджио (один раз на дату) */
+  if (pct >= 1 && done > 0 && !closedCelebrated.has(selectedDate)) {
+    closedCelebrated.add(selectedDate);
+    play("dayClosed");
+  } else if (pct < 1) {
+    closedCelebrated.delete(selectedDate);
+  }
   const fg = document.getElementById("ringFg");
   fg.style.strokeDasharray = C;
   fg.style.strokeDashoffset = C * (1 - Math.min(pct, 1));
@@ -212,8 +241,10 @@ function renderModes() {
     btn.dataset.mode = key;
     btn.addEventListener("click", () => {
       state.modes[selectedDate] = key;
+      touchDay(selectedDate);
       save();
       renderAll();
+      play("tick");
       toast(key === "bad" ? "Плохой день — цель просто что-то сделать." : m.hint);
     });
     modeButtons.appendChild(btn);
@@ -348,7 +379,10 @@ function renderGym() {
       save();
       renderGym();
       renderHero();
-      if (saved[p.key]) toast("Тренировка отмечена. Восстановление — часть программы.");
+      if (saved[p.key]) {
+        play("workout");
+        toast("Тренировка отмечена. Восстановление — часть программы.");
+      }
     });
     checks.appendChild(row);
   });
@@ -583,12 +617,14 @@ function renderNow() {
       const id = btn.dataset.mark;
       const level = btn.dataset.level;
       data[id] = level;
+      touchDay(nowKey);
       save();
       if (selectedDate !== nowKey) {
         selectedDate = nowKey;
         dateInput.value = selectedDate;
       }
       renderAll();
+      play(level === "min" ? "mark" : "markGood");
       toast(`Отмечено: ${LEVEL_TEXT[level]}. Этого достаточно.`);
     });
   }
@@ -814,6 +850,7 @@ document.getElementById("nextDay").addEventListener("click", () => {
 document.getElementById("lcAdd").addEventListener("click", () => {
   const name = document.getElementById("lcName").value.trim();
   if (!name) {
+    play("nope");
     toast("Напиши название задачи");
     return;
   }
@@ -829,6 +866,7 @@ document.getElementById("lcAdd").addEventListener("click", () => {
   save();
   renderProgress();
   renderHero();
+  play("markGood");
   toast("Записано. Теперь задачу нужно повторить через несколько дней.");
 });
 
@@ -856,11 +894,29 @@ function renderAll() {
   renderGym();
   renderNow();
   renderTimeline();
+  renderAchievements();
 }
 
 renderBadDay();
 renderRules();
 renderAll();
+
+/* ─────────────── новый слой: звук, достижения, офлайн, синк ─────────────── */
+
+initAudioOnFirstGesture();
+renderSfxBox();
+renderPushBox();
+
+/* Достижения, заработанные до этой версии, отмечаем молча:
+   звук и тост — только за то, что случилось при тебе. */
+(function unlockExistingQuietly() {
+  const fresh = checkAchievements();
+  renderAchievements();
+  return fresh;
+})();
+
+initServiceWorker().then(refreshPushState);
+initSync();
 
 /* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
 setInterval(() => {
@@ -884,3 +940,39 @@ if (!localStorage.getItem(STORE_KEY + ":seen")) {
   localStorage.setItem(STORE_KEY + ":seen", "1");
   setTimeout(() => toast("Начни с одного блока. Даже 20 минут считаются."), 900);
 }
+
+/* ─────────────── настройки звука ─────────────── */
+
+function renderSfxBox() {
+  const root = document.getElementById("sfxBox");
+  if (!root) return;
+  const on = sfxEnabled();
+
+  root.innerHTML = `
+    <div class="acc-row">
+      <span class="acc-dot ${on ? "on" : "off"}"></span>
+      <div>
+        <div class="acc-title">Звуки достижений</div>
+        <div class="acc-sub">${on ? "Короткий приятный сигнал при отметке, закрытии дня и новых достижениях." : "Выключены — тишина."}</div>
+      </div>
+    </div>
+    <div class="sfx-actions">
+      <button class="ghost-btn acc-btn" id="sfxToggle">${on ? "Выключить" : "Включить"}</button>
+      <button class="ghost-btn acc-btn" id="sfxTest">Проверить звук</button>
+    </div>`;
+
+  document.getElementById("sfxToggle").addEventListener("click", () => {
+    setSfxEnabled(!on);
+    renderSfxBox();
+    if (!on) play("markGood");
+  });
+
+  document.getElementById("sfxTest").addEventListener("click", () => {
+    const wasOn = sfxEnabled();
+    if (!wasOn) setSfxEnabled(true);
+    SFX.achievement();
+    if (!wasOn) setTimeout(() => setSfxEnabled(false), 100);
+  });
+}
+
+renderSfxBox();
