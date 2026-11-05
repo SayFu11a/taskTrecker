@@ -60,6 +60,7 @@
   <button class="tab" data-tab="progress" role="tab">Прогресс</button>
   <button class="tab" data-tab="rules" role="tab">Правила</button>
   <button class="tab" data-tab="awards" role="tab">Награды</button>
+  <button class="tab" data-tab="profile" role="tab">Профиль</button>
 </nav>
 
 <main class="wrap">
@@ -201,12 +202,6 @@
       </div>
       <div class="lc-list" id="lcList"></div>
     </div>
-
-    <div class="card danger-zone">
-      <h3>Сброс</h3>
-      <p class="muted small">Удаляет все отметки, журнал и статистику из этого браузера.</p>
-      <button class="danger-btn" id="resetBtn">Сбросить всё</button>
-    </div>
   </section>
 
   <!-- ─────────── ПРАВИЛА ─────────── -->
@@ -259,23 +254,46 @@
 
     <div class="stat-grid" id="achStats"></div>
     <div class="ach-grid" id="achievements"></div>
+  </section>
 
+  <!-- ─────────── ПРОФИЛЬ ─────────── -->
+  <section class="panel" id="panel-profile">
     <div class="section-head">
-      <h2>Аккаунт и устройства</h2>
-      <p>Один аккаунт — телефон и компьютер видят одни и те же отметки.</p>
+      <h2>Профиль</h2>
+      <p>Аккаунт, звук, напоминания и данные — всё в одном месте.</p>
     </div>
-    <div class="card" id="accountBox"></div>
 
-    <div class="section-head">
-      <h2>Звук</h2>
-    </div>
-    <div class="card" id="sfxBox"></div>
+    <div class="profile-grid">
+      <div class="card profile-card">
+        <div class="profile-label">Аккаунт</div>
+        <div id="accountBox"></div>
+      </div>
 
-    <div class="section-head">
-      <h2>Уведомления</h2>
-      <p>Напоминание придёт, даже если трекер закрыт. На iPhone — только после установки на экран «Домой».</p>
+      <div class="card profile-card">
+        <div class="profile-label">Звук</div>
+        <div id="sfxBox"></div>
+      </div>
+
+      <div class="card profile-card">
+        <div class="profile-label">Уведомления</div>
+        <div id="pushBox"></div>
+        <p class="acc-sub profile-note">На iPhone напоминания приходят только у сайта, добавленного на экран «Домой».</p>
+      </div>
+
+      <div class="card profile-card">
+        <div class="profile-label">Данные</div>
+        <div class="acc-row">
+          <span class="acc-dot off"></span>
+          <div>
+            <div class="acc-title">Сброс на этом устройстве</div>
+            <div class="acc-sub">Удаляет отметки, журнал и статистику из этого браузера. На сервере данные останутся.</div>
+          </div>
+        </div>
+        <button class="danger-btn" id="resetBtn">Сбросить всё</button>
+      </div>
     </div>
-    <div class="card" id="pushBox"></div>
+
+    <p class="footer-note" id="profileBuild"></p>
   </section>
 
 </main>
