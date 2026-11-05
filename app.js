@@ -2,6 +2,9 @@
 
 const STORE_KEY = "vp-tracker-v1";
 
+/* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
+const BUILD_LABEL = "сборка v6";
+
 const DEFAULT_STATE = {
   days: {},        // { "2026-11-04": { ulbi: "norm", ... } }
   modes: {},       // { "2026-11-04": "bad" | "norm" | "good" }
@@ -863,8 +866,21 @@ function renderRules() {
 function switchTab(name) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + name));
+  /* Возврат на страницу — туда же, где остановился. Иначе после перезагрузки
+     всегда открывается «День», даже если человек смотрел профиль. */
+  try {
+    localStorage.setItem(STORE_KEY + ":tab", name);
+  } catch {}
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+
+/* последняя открытая вкладка */
+(function restoreTab() {
+  try {
+    const saved = localStorage.getItem(STORE_KEY + ":tab");
+    if (saved && document.getElementById("panel-" + saved)) switchTab(saved);
+  } catch {}
+})();
 
 document.querySelectorAll(".tab").forEach((t) => {
   t.addEventListener("click", () => switchTab(t.dataset.tab));
@@ -982,6 +998,13 @@ document.addEventListener("visibilitychange", () => {
     renderTimeline();
   }
 });
+
+/* версия сборки — чтобы при жалобе «не работает» было видно, что открыто */
+(function showBuild() {
+  const root = document.getElementById("profileBuild");
+  if (!root) return;
+  root.textContent = "Трекер · " + BUILD_LABEL + " · данные локально и в аккаунте";
+})();
 
 /* подсказка при первом визите */
 if (!localStorage.getItem(STORE_KEY + ":seen")) {

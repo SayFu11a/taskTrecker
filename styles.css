@@ -1324,3 +1324,40 @@ input::placeholder { color: #626880; }
 .push-actions { display: grid; gap: 8px; }
 .push-actions:has(#pushTest) { grid-template-columns: 1fr auto; }
 .push-actions .acc-btn { width: auto; height: auto; padding: 10px 14px; font-size: 13px; }
+
+/* ─────────── вкладка «Профиль» ─────────── */
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+
+.profile-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.profile-note { margin: 0; }
+
+.profile-card .acc-btn { width: 100%; }
+
+/* в профиле строки аккаунта компактнее, чем были в «Наградах» */
+.profile-card .acc-title { font-size: 14px; }
+.profile-card .danger-btn { width: 100%; margin-top: auto; }
+
+@media (max-width: 520px) {
+  .profile-grid { grid-template-columns: 1fr; gap: 10px; }
+  .profile-card { padding: 16px; }
+}
