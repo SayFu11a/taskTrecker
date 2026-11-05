@@ -115,50 +115,97 @@ function hasLocalData() {
   return Object.keys(h).length > 0 || (state.leetcode || []).length > 0;
 }
 
-/* Разложить состояние на строки dto для таблиц. */
+/* Разложить состояние на строки dto для таблиц.
+   В поле hours уходит { блок: { min, timer: { startedAt } } } — записанные
+   минуты и, если таймер идёт, время его запуска. Тогда таймер переживает
+   перезагрузку и виден на других устройствах. */
 function stateToRows(userId) {
   const meta = state.meta || {};
-  /* Отправляем только те дни, где есть реальные минуты.
-     Уровни больше не хранятся: они считаются из часов на любом устройстве. */
   const dates = Object.keys(state.hours || {}).filter((d) => {
     const day = state.hours[d] || {};
-    return Object.values(day).some((m) => m > 0);
+    return Object.keys(day).length > 0;
   });
 
   return dates.map((date) => ({
     user_id: userId,
     date,
-    hours: state.hours[date],
+    hours: normalizeDayForDb(state.hours[date]),
     mode: (state.modes || {})[date] || null,
     updated_at: new Date(meta[date] || Date.now()).toISOString(),
   }));
 }
 
-/* Собрать состояние из строк сервера, слив с локальным по времени. */
+/* Число минут → { min } — один формат в базе, чтобы слияние было предсказуемым. */
+function normalizeDayForDb(day) {
+  const out = {};
+  Object.keys(day || {}).forEach((id) => {
+    const rec = day[id];
+    if (typeof rec === "number") {
+      if (rec > 0) out[id] = { min: rec };
+      return;
+    }
+    if (!rec) return;
+    const min = Number(rec.min) || 0;
+    const startedAt = rec.timer && rec.timer.startedAt;
+    if (!min && !startedAt) return;
+    out[id] = { min };
+    if (startedAt) out[id].timer = { startedAt };
+  });
+  return out;
+}
+
+/* Слить день с сервера с локальным ПО БЛОКАМ, а не целиком:
+   если на телефоне отмечали LeetCode, а на ПК — Ulbi, оба сохранятся. */
+function mergeDay(localDay, remoteDay) {
+  const out = {};
+  const local = localDay || {};
+  const remote = remoteDay || {};
+  const ids = new Set([...Object.keys(local), ...Object.keys(remote)]);
+
+  ids.forEach((id) => {
+    const a = local[id]; // локальный
+    const b = remote[id]; // серверный
+    const aMin = typeof a === "number" ? a : (a && Number(a.min)) || 0;
+    const bMin = typeof b === "number" ? b : (b && Number(b.min)) || 0;
+    const min = Math.max(aMin, bMin); // большее время не теряем
+    const aTimer = a && a.timer && a.timer.startedAt;
+    const bTimer = b && b.timer && b.timer.startedAt;
+    /* если таймер идёт на двух устройствах — берём тот, что раньше начался */
+    const timers = [aTimer, bTimer].filter(Boolean).map((x) => new Date(x).getTime()).filter(Number.isFinite);
+    const startedAt = timers.length ? new Date(Math.min(...timers)).toISOString() : null;
+
+    if (!min && !startedAt) return;
+    out[id] = startedAt ? { min, timer: { startedAt } } : { min };
+  });
+
+  return out;
+}
+
+/* Собрать состояние из строк сервера, слив с локальным. */
 function mergeRowsIntoState(rows) {
-  /* state.days здесь не нужен: уровни больше не хранятся, только минуты. */
   state.modes = state.modes || {};
   state.meta = state.meta || {};
+  state.hours = state.hours || {};
 
   rows.forEach((row) => {
     const remoteTs = new Date(row.updated_at).getTime() || 0;
     const localTs = state.meta[row.date] || 0;
 
-    if (remoteTs > localTs) {
-      if (row.mode) state.modes[row.date] = row.mode;
+    if (row.mode) state.modes[row.date] = row.mode;
 
-      /* Часы — единственный источник. Старые строки (до перехода) содержат
-         только blocks с уровнями: переводим их в минуты по порогам блока. */
-      state.hours = state.hours || {};
-      if (row.hours && Object.keys(row.hours).length) {
-        state.hours[row.date] = row.hours;
-      } else if (row.blocks && typeof hoursFromLegacyLevels === "function") {
-        const legacy = hoursFromLegacyLevels(row.blocks);
-        if (legacy && Object.keys(legacy).length) state.hours[row.date] = legacy;
-      }
-
-      state.meta[row.date] = remoteTs;
+    /* Часы — единственный источник. Старые строки (до перехода на минуты)
+       содержат только blocks с уровнями: переводим их в минуты. */
+    let remoteHours = row.hours;
+    if ((!remoteHours || !Object.keys(remoteHours).length) && row.blocks && typeof hoursFromLegacyLevels === "function") {
+      remoteHours = hoursFromLegacyLevels(row.blocks);
     }
+
+    const merged = mergeDay(state.hours[row.date], remoteHours);
+    if (Object.keys(merged).length) state.hours[row.date] = merged;
+
+    /* meta двигаем только если сервер реально новее — иначе локальная
+       правка перетрёт следующую отправку своим «старым» временем */
+    if (remoteTs > localTs) state.meta[row.date] = remoteTs;
   });
 }
 
@@ -205,7 +252,7 @@ async function pushAll() {
 async function pushSettings() {
   if (!sb || !session) return;
   try {
-    await sb.from("settings").upsert(
+    const { error } = await sb.from("settings").upsert(
       {
         user_id: session.user.id,
         week: state.week,
@@ -216,6 +263,13 @@ async function pushSettings() {
       },
       { onConflict: "user_id" }
     );
+    /* ошибку нельзя молча глотать: иначе «настройки не сохраняются» выглядит
+       как будто всё в порядке */
+    if (error) {
+      console.warn("Настройки не ушли", error);
+      lastAuthError = "Настройки не сохранились на сервере: " + (error.message || "ошибка");
+      renderAccount();
+    }
   } catch (e) {
     console.warn("Настройки не ушли", e);
   }

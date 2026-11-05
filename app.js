@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v8";
+const BUILD_LABEL = "сборка v9";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -12,7 +12,7 @@ const DEFAULT_STATE = {
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
   hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — единственный источник: минуты
-  timer: null,      // { block, date, startedAt } — идёт прямо сейчас
+  timer: null,      // legacy, не используется: таймер живёт в state.hours[дата][блок].timer
   scheduleView: "detail", // "detail" | "coarse"
   achievements: {}, // { id: ISO-дата открытия }
   meta: {},         // { "2026-11-04": timestamp последнего изменения } — для синка
@@ -26,37 +26,130 @@ const cloneDeep = (obj) =>
 
 let state = load();
 
-/* ── Однократная миграция: раньше уровень был отдельной отметкой,
-   теперь единственный источник — минуты. Старые «отмечено» не теряем:
-   выставляем минимальный порог блока, дальше человек добавит реальное время. */
-(function migrateLevelsToMinutes() {
-  if (state.hoursMigratedV1) return;
-  state.hours = state.hours || {};
-  let moved = 0;
+/* ─────────── таймер ───────────
+   Таймер живёт в тех же данных, что и время: state.hours[дата][блок] = { min, timer }.
+   timer.startedAt — обычный ISO-таймстемп (как updated_at в базе). Тикающее время
+   нигде не хранится, оно всегда считается как now − startedAt. Поэтому перезагрузка,
+   закрытие страницы и синхронизация ничего не сбрасывают. */
 
-  Object.keys(state.days || {}).forEach((date) => {
-    const blocks = state.days[date] || {};
-    Object.keys(blocks).forEach((id) => {
-      const level = blocks[id];
-      if (!LEVEL_ORDER[level]) return;
-      const day = state.hours[date] || (state.hours[date] = {});
-      const need = minutesForLevel(id, level);
-      if (!day[id] && need) {
-        day[id] = need;
-        moved++;
-      }
+/* Запись блока: { min, timer }. Число минут — старый формат, понимаем и его. */
+function blockRecord(dateKey, blockId) {
+  const day = (state.hours || {})[dateKey];
+  const rec = day ? day[blockId] : null;
+  if (rec === undefined || rec === null) return { min: 0, timer: null };
+  if (typeof rec === "number") return { min: rec, timer: null };
+  return { min: Number(rec.min) || 0, timer: rec.timer || null };
+}
+
+/* Идущий таймер по блоку: { startedAt, startedAtIso } или null. */
+function timerFor(dateKey, blockId) {
+  const t = blockRecord(dateKey, blockId).timer;
+  if (!t || !t.startedAt) return null;
+  const ts = new Date(t.startedAt).getTime();
+  if (!Number.isFinite(ts)) return null;
+  return { startedAt: ts, startedAtIso: new Date(ts).toISOString() };
+}
+
+/* Все идущие таймеры — по всем дням и блокам. */
+function runningTimers() {
+  const out = [];
+  Object.keys(state.hours || {}).forEach((dateKey) => {
+    const day = state.hours[dateKey] || {};
+    Object.keys(day).forEach((blockId) => {
+      const t = timerFor(dateKey, blockId);
+      if (t) out.push({ date: dateKey, block: blockId, startedAt: t.startedAt, startedAtIso: t.startedAtIso });
     });
   });
+  return out;
+}
 
-  /* Старое хранилище уровней больше не нужно — чтобы никто случайно не читал его снова. */
-  delete state.days;
-  state.hoursMigratedV1 = true;
-  if (moved) {
-    saveLocalOnly();
-    console.log("Мигрировано отметок в минуты:", moved);
+/* Единственное место, где пишутся минуты дня. Идущий таймер сохраняется. */
+function writeMinutes(dateKey, blockId, minutes) {
+  if (!state.hours) state.hours = {};
+  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
+  const next = Math.max(0, Math.round(minutes || 0));
+  const timer = blockRecord(dateKey, blockId).timer;
+  if (!next && !timer) delete day[blockId];
+  else day[blockId] = timer ? { min: next, timer } : { min: next };
+  if (!Object.keys(day).length) delete state.hours[dateKey];
+  touchDay(dateKey);
+  save();
+}
+
+/* Включить/выключить таймер блока, не трогая записанные минуты. */
+function setBlockTimer(dateKey, blockId, startedAtIso) {
+  if (!state.hours) state.hours = {};
+  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
+  const min = blockRecord(dateKey, blockId).min;
+  if (!min && !startedAtIso) delete day[blockId];
+  else day[blockId] = startedAtIso ? { min, timer: { startedAt: startedAtIso } } : { min };
+  if (!Object.keys(day).length) delete state.hours[dateKey];
+  touchDay(dateKey);
+  save();
+}
+
+/* Больше 12 часов подряд — это забытый таймер: пишем максимум 12 ч и говорим вслух. */
+const TIMER_MAX_MIN = 12 * 60;
+
+/* Пока идёт загрузка (миграции, обрезка забытых таймеров) — пишем только
+   в localStorage: экран ещё не собран, render-функции трогать нельзя. */
+var booting = true;
+
+/* ── Однократная миграция старых данных: уровни в state.days и одиночный state.timer.
+   Старые «отмечено» не теряем. */
+(function migrateOldData() {
+  let moved = 0;
+
+  if (!state.hoursMigratedV1) {
+    Object.keys(state.days || {}).forEach((date) => {
+      const blocks = state.days[date] || {};
+      Object.keys(blocks).forEach((id) => {
+        const level = blocks[id];
+        if (!LEVEL_ORDER[level]) return;
+        const need = minutesForLevel(id, level);
+        if (!blockRecord(date, id).min && need) {
+          state.hours[date] = state.hours[date] || {};
+          state.hours[date][id] = { min: need };
+          moved++;
+        }
+      });
+    });
+    delete state.days;
+    state.hoursMigratedV1 = true;
   }
+
+  /* Одиночный таймер { block, date, startedAt } переезжает в свой блок. */
+  if (state.timer && state.timer.block && state.timer.startedAt) {
+    const d = state.timer.date || todayKey();
+    const id = state.timer.block;
+    if (!timerFor(d, id)) {
+      const ts = new Date(state.timer.startedAt).getTime();
+      if (Number.isFinite(ts)) {
+        state.hours[d] = state.hours[d] || {};
+        const min = blockRecord(d, id).min;
+        state.hours[d][id] = { min, timer: { startedAt: new Date(ts).toISOString() } };
+      }
+    }
+  }
+  delete state.timer;
+
+  /* Забытый таймер (страница закрыта вчера) не должен записать сутки. */
+  runningTimers()
+    .filter((t) => Date.now() - t.startedAt > TIMER_MAX_MIN * 60000)
+    .forEach((t) => {
+      const rec = blockRecord(t.date, t.block);
+      const add = Math.min(Math.round((Date.now() - t.startedAt) / 60000), TIMER_MAX_MIN);
+      setBlockTimer(t.date, t.block, null);
+      writeMinutes(t.date, t.block, rec.min + add);
+      setTimeout(() => {
+        toast(`Таймер по «${blockName(t.block)}» шёл слишком долго — записал ${fmtMinutes(add)}. Проверь время.`);
+      }, 1200);
+    });
+
+  saveLocalOnly();
+  if (moved) console.log("Мигрировано отметок в минуты:", moved);
+  booting = false;
 })();
-let selectedDate = todayKey();
 
 /* ─────────────── утилиты ─────────────── */
 
@@ -65,10 +158,41 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return cloneDeep(DEFAULT_STATE);
     const parsed = JSON.parse(raw);
-    return { ...cloneDeep(DEFAULT_STATE), ...parsed };
+    return normalizeStateHours({ ...cloneDeep(DEFAULT_STATE), ...parsed });
   } catch {
     return cloneDeep(DEFAULT_STATE);
   }
+}
+
+/* Данные блока в хранилище приводим к одному виду: { min, timer? }.
+   Страховка от «обновил страницу — время пропало»: читаем и старые числа,
+   и старые уровни, чтобы ничего не потерять. */
+function normalizeStateHours(st) {
+  const out = {};
+  const src = st.hours || {};
+  Object.keys(src).forEach((date) => {
+    const day = src[date];
+    if (!day || typeof day !== "object") return;
+    const norm = {};
+    Object.keys(day).forEach((id) => {
+      const rec = day[id];
+      if (typeof rec === "number") {
+        if (rec > 0) norm[id] = { min: rec };
+        return;
+      }
+      if (!rec || typeof rec !== "object") return;
+      const min = Number(rec.min) || 0;
+      let timer = null;
+      if (rec.timer && rec.timer.startedAt) {
+        const ts = new Date(rec.timer.startedAt).getTime();
+        if (Number.isFinite(ts)) timer = { startedAt: new Date(ts).toISOString() };
+      }
+      if (min > 0 || timer) norm[id] = timer ? { min, timer } : { min };
+    });
+    if (Object.keys(norm).length) out[date] = norm;
+  });
+  st.hours = out;
+  return st;
 }
 
 /* Запись только в браузер — используется синхронизацией, чтобы не было цикла. */
@@ -82,6 +206,7 @@ function saveLocalOnly() {
 
 function save() {
   saveLocalOnly();
+  if (booting) return;
   if (typeof refreshAchievements === "function") refreshAchievements();
   if (typeof syncSoon === "function") syncSoon();
 }
@@ -125,92 +250,153 @@ function fmtShort(min) {
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
 }
 
+/* Разбор ручного ввода: «45», «-15», «1.5» (=90 мин), «1,5», «1 ч 30», «1:30». */
+function parseMinutesInput(raw) {
+  const text = String(raw == null ? "" : raw).trim().toLowerCase().replace(",", ".");
+  if (!text) return null;
+  const sign = text.startsWith("-") ? -1 : 1;
+
+  const colon = text.match(/^[+-]?(\d+):(\d{1,2})$/);
+  if (colon) return sign * (parseInt(colon[1], 10) * 60 + parseInt(colon[2], 10));
+
+  const minutesWord = text.match(/^[+-]?(\d+(?:\.\d+)?)\s*(?:мин[а-я]*|м|m)$/);
+  if (minutesWord) return sign * Math.round(parseFloat(minutesWord[1]));
+
+  const hoursWithMin = text.match(/^[+-]?(\d+(?:\.\d+)?)\s*(?:ч|час[а-я]*|h)\s*(\d+)?\s*(?:мин[а-я]*|м|m)?$/);
+  if (hoursWithMin) {
+    const h = Math.abs(parseFloat(hoursWithMin[1]));
+    const m = hoursWithMin[2] ? parseInt(hoursWithMin[2], 10) : Math.round((h % 1) * 60);
+    return sign * Math.round(Math.floor(h) * 60 + m);
+  }
+
+  const plain = text.match(/^[+-]?(\d+(?:\.\d+)?)$/);
+  if (plain) {
+    const v = Math.abs(parseFloat(plain[1]));
+    /* целое до 12 — считаем минутами («45»), дробное или «10» — часами? Нет:
+       «45» это минуты, «1.5» — часы. Целое ≥ 13 тоже минуты. */
+    if (v % 1 !== 0) return sign * Math.round(v * 60);
+    return sign * Math.round(v);
+  }
+  return null;
+}
+
+/* «чч:мм» по таймстемпу — подсказка «идёт с 14:05» */
+function hhmm(ts) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/* Минуты блока в хранилище: число (старый формат) или { min, timer }. */
+function blockMinutes(rec) {
+  if (rec === undefined || rec === null) return 0;
+  if (typeof rec === "number") return rec;
+  return Number(rec.min) || 0;
+}
+
+/* Записанные минуты — без идущего таймера. Именно это уходит в базу. */
+function savedMinutesFor(dateKey, blockId) {
+  const day = (state.hours || {})[dateKey] || {};
+  if (!blockId) return Object.keys(day).reduce((sum, id) => sum + blockMinutes(day[id]), 0);
+  return blockMinutes(day[blockId]);
+}
+
+/* Сколько сейчас тикает по блоку (незаписанные минуты). */
+function runningMinutesFor(dateKey, blockId) {
+  const t = timerFor(dateKey, blockId);
+  if (!t) return 0;
+  return Math.max(0, Math.floor((Date.now() - t.startedAt) / 60000));
+}
+
+/* Минуты «как есть сейчас»: записанные + тикающий таймер.
+   Отсюда считается всё, что видит человек: уровни, прогресс, плашки. */
+function hoursFor(dateKey, blockId) {
+  const saved = savedMinutesFor(dateKey, blockId);
+  if (!blockId) {
+    const day = (state.hours || {})[dateKey] || {};
+    return saved + Object.keys(day).reduce((sum, id) => sum + runningMinutesFor(dateKey, id), 0);
+  }
+  return saved + runningMinutesFor(dateKey, blockId);
+}
+
 /* Что показать как «уровень»: считается из минут, отдельно не хранится. */
 function levelOf(dateKey, blockId) {
   return levelFromMinutes(blockId, hoursFor(dateKey, blockId));
 }
 
-function hoursFor(dateKey, blockId) {
-  const day = (state.hours || {})[dateKey] || {};
-  return blockId ? day[blockId] || 0 : Object.values(day).reduce((a, b) => a + b, 0);
-}
-
-/* Старое хранилище: { ulbi: "norm" } → { ulbi: 120 } по порогам блока.
-   Нужно, чтобы дни, отмеченные до перехода, не обнулились при синхронизации. */
+/* Старое хранилище: { ulbi: "norm" } → { ulbi: 120 } по порогам блока. */
 function hoursFromLegacyLevels(blocks) {
   const out = {};
   Object.keys(blocks || {}).forEach((id) => {
     const level = blocks[id];
     const need = LEVEL_ORDER[level] ? minutesForLevel(id, level) : 0;
-    if (need) out[id] = need;
+    if (need) out[id] = { min: need };
   });
   return out;
 }
 
 /* «Отметить уровень» = поставить ровно столько минут, сколько нужно порогу.
-   Одно действие, одно поле в базе. */
+   Если по блоку идёт таймер — сначала забираем его тикающее время,
+   иначе оно потеряется. */
 function setBlockMinutes(dateKey, blockId, minutes) {
-  if (!state.hours) state.hours = {};
-  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
-  const next = Math.max(0, Math.round(minutes || 0));
-  if (!next) delete day[blockId];
-  else day[blockId] = next;
-  if (!Object.keys(day).length) delete state.hours[dateKey];
-  touchDay(dateKey);
-  save();
+  if (timerFor(dateKey, blockId)) stopTimer(dateKey, blockId);
+  writeMinutes(dateKey, blockId, minutes);
 }
 
 function addHours(dateKey, blockId, deltaMin) {
-  if (!state.hours) state.hours = {};
-  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
-  const next = Math.max(0, (day[blockId] || 0) + deltaMin);
-  if (next === 0) delete day[blockId];
-  else day[blockId] = next;
-  if (!Object.keys(day).length) delete state.hours[dateKey];
-  touchDay(dateKey);
-  save();
+  if (timerFor(dateKey, blockId)) stopTimer(dateKey, blockId);
+  writeMinutes(dateKey, blockId, savedMinutesFor(dateKey, blockId) + deltaMin);
 }
 
-/* таймер */
-function timerBlock() {
-  const t = state.timer;
-  if (!t) return null;
-  return t;
-}
-
-function timerElapsedMin() {
-  const t = timerBlock();
-  if (!t) return 0;
-  return Math.max(0, Math.floor((Date.now() - t.startedAt) / 60000));
-}
 
 function startTimer(blockId) {
-  if (state.timer) {
-    toast("Уже идёт таймер по блоку «" + blockName(state.timer.block) + "». Сначала останови его.");
+  const running = runningTimers();
+  if (running.length) {
+    toast(`Уже идёт таймер: «${blockName(running[0].block)}». Сначала останови его.`);
     return;
   }
-  state.timer = { block: blockId, date: selectedDate, startedAt: Date.now() };
-  save();
-  renderBlocks();
-  toast("Таймер пошёл: " + blockName(blockId));
+  setBlockTimer(selectedDate, blockId, new Date().toISOString());
+  renderAll();
+  toast(`Таймер пошёл: ${blockName(blockId)}`);
   play("tick");
 }
 
-function stopTimer() {
-  const t = state.timer;
-  if (!t) return;
-  const min = Math.round((Date.now() - t.startedAt) / 60000);
-  state.timer = null;
-  if (min >= 1) {
-    addHours(t.date, t.block, min);
-    toast(`Записано ${fmtMinutes(min)} в «${blockName(t.block)}».`);
+/* Стоп: тикающее время переезжает в записанные минуты. */
+function stopTimer(dateKey, blockId) {
+  const targets = [];
+  if (blockId) targets.push({ date: dateKey || selectedDate, block: blockId });
+  else runningTimers().forEach((t) => targets.push({ date: t.date, block: t.block }));
+  if (!targets.length) return;
+
+  let total = 0;
+  targets.forEach(({ date, block }) => {
+    const t = timerFor(date, block);
+    if (!t) return;
+    let min = Math.round((Date.now() - t.startedAt) / 60000);
+    const rec = blockRecord(date, block);
+    if (min > TIMER_MAX_MIN) {
+      min = TIMER_MAX_MIN;
+      toast("Таймер шёл больше 12 часов — записал 12 ч. Похоже, забыл остановить.");
+    }
+    setBlockTimer(date, block, null);
+    if (min >= 1) {
+      writeMinutes(date, block, rec.min + min);
+      total += min;
+    } else {
+      writeMinutes(date, block, rec.min);
+    }
+  });
+
+  if (total >= 1) {
+    toast(`Записано ${fmtMinutes(total)}.`);
     play("markGood");
   } else {
-    save();
     toast("Меньше минуты — не записал.");
   }
   renderAll();
 }
+
+/* выбранная дата — объявляем до всего, что её читает */
+var selectedDate = todayKey();
 
 function blockName(id) {
   const b = BLOCKS.find((x) => x.id === id);
@@ -304,15 +490,21 @@ function renderBlocks() {
 
       btn.addEventListener("click", () => {
         const need = minutesForLevel(b.id, level);
+        /* Считаем заново в момент клика: пока карточка висела, мог идти таймер
+           или время прийти с другого устройства. Старое значение здесь врёт. */
+        const nowMin = hoursFor(selectedDate, b.id);
         /* Никогда не отнимаем время: если его уже больше порога — просто говорим об этом.
            Иначе «минимум» затирал бы реальные 2 часа работы. */
-        if (minutes >= need) {
-          toast(
-            `«${b.name}»: уже ${fmtMinutes(minutes)} — это ${LEVEL_LABEL[levelFromMinutes(b.id, minutes)].toLowerCase()}.`
-          );
+        if (nowMin >= need) {
+          if (timerFor(selectedDate, b.id)) stopTimer(selectedDate, b.id);
+          const lvlNow = levelFromMinutes(b.id, hoursFor(selectedDate, b.id));
+          toast(`«${b.name}»: уже ${fmtMinutes(hoursFor(selectedDate, b.id))} — это ${LEVEL_LABEL[lvlNow].toLowerCase()}.`);
+          renderAll();
           return;
         }
-        const delta = need - minutes;
+        /* Догоняем до порога: если таймер идёт, addHours сначала его остановит
+           и запишет натикавшее. */
+        const delta = need - nowMin;
         addHours(selectedDate, b.id, delta);
         const after = levelFromMinutes(b.id, hoursFor(selectedDate, b.id));
         renderAll();
@@ -362,16 +554,15 @@ function renderBlocks() {
    Держим одной полосой: на телефоне она переносится, на десктопе — в ряд. */
 function renderTimeRow(b) {
   const row = el("div", "time-row");
-  const spent = hoursFor(selectedDate, b.id);
-  const running = state.timer && state.timer.block === b.id;
+  /* hoursFor уже включает идущий таймер — отдельно его не прибавляем */
+  const shown = hoursFor(selectedDate, b.id);
+  const timer = timerFor(selectedDate, b.id);
+  const running = Boolean(timer);
 
-  /* идущий таймер показываем живым счётчиком поверх записанного времени */
-  const live = running ? timerElapsedMin() : 0;
-  const shown = spent + live;
   const value = el("div", "time-value" + (shown ? " has" : "") + (running ? " ticking" : ""),
     fmtMinutes(shown));
   value.title = running
-    ? "Идёт таймер. Нажми «стоп», чтобы записать."
+    ? "Идёт таймер с " + hhmm(timer.startedAt) + ". Нажми «стоп», чтобы записать."
     : "Сколько реально потрачено на этот блок";
 
   const quick = el("div", "time-quick");
@@ -392,11 +583,11 @@ function renderTimeRow(b) {
   manualBtn.type = "button";
   manualBtn.title = "Ввести своё время";
   manualBtn.addEventListener("click", () => {
-    const input = prompt("Сколько минут записать?\nМожно с минусом, чтобы убрать: -15", "45");
+    const input = prompt("Сколько минут записать?\nМожно с минусом, чтобы убрать: -15\nМожно в часах: 1.5 = 90 минут", "45");
     if (input === null) return;
-    const min = parseInt(String(input).replace(/[^0-9-]/g, ""), 10);
-    if (!Number.isFinite(min) || min === 0) {
-      toast("Не понял число. Напиши, например, 45 или -15.");
+    const min = parseMinutesInput(input);
+    if (min === null || min === 0) {
+      toast("Не понял число. Напиши 45, -15 или 1.5 (часа).");
       return;
     }
     addHours(selectedDate, b.id, min);
@@ -409,7 +600,7 @@ function renderTimeRow(b) {
   const timerBtn = el("button", "time-btn time-start" + (running ? " running" : ""), running ? "■ стоп" : "▶ старт");
   timerBtn.type = "button";
   timerBtn.title = running ? "Остановить таймер" : "Запустить таймер для этого блока";
-  timerBtn.addEventListener("click", () => (running ? stopTimer() : startTimer(b.id)));
+  timerBtn.addEventListener("click", () => (running ? stopTimer(selectedDate, b.id) : startTimer(b.id)));
 
   const right = el("div", "time-right");
   right.appendChild(quick);
@@ -420,9 +611,10 @@ function renderTimeRow(b) {
   row.appendChild(right);
 
   /* таймер, идущий в другом блоке, не должен молчать */
-  if (state.timer && !running) {
+  const other = runningTimers().filter((t) => !(t.date === selectedDate && t.block === b.id))[0];
+  if (other) {
     row.appendChild(
-      el("span", "time-other", `таймер идёт в «${blockName(state.timer.block)}»`)
+      el("span", "time-other", `таймер идёт в «${blockName(other.block)}» с ${hhmm(other.startedAt)}`)
     );
   }
 
@@ -707,15 +899,6 @@ function minutesOf(hhmm) {
   return h * 60 + m;
 }
 
-function fmtMinutes(total) {
-  const t = Math.max(0, total);
-  const h = Math.floor(t / 60);
-  const m = t % 60;
-  if (h && m) return `${h} ч ${m} мин`;
-  if (h) return `${h} ч`;
-  return `${m} мин`;
-}
-
 function currentTimeline() {
   const view = state.scheduleView === "coarse" ? "coarse" : "detail";
   return SCHEDULE_VIEWS[view].timeline;
@@ -846,6 +1029,13 @@ function renderNow() {
         ? `<button class="now-done is-done" disabled>✓ ${LEVEL_TEXT[done]} · ${fmtMinutes(hoursFor(nowKey, slot.block))}</button>`
         : `<button class="now-done" data-mark="${slot.block}" data-level="${target}">Отметить ${LEVEL_TEXT[target]} · ${block[target]}</button>`;
     }
+  }
+
+  /* идущий таймер виден и здесь, даже если открыт другой интервал дня */
+  const liveTimer = runningTimers()[0];
+  if (liveTimer) {
+    const live = hoursFor(liveTimer.date, liveTimer.block);
+    blockLine += `<div class="now-timer">⏱ ${blockName(liveTimer.block)} — идёт с ${hhmm(liveTimer.startedAt)}, уже ${fmtMinutes(live)}</div>`;
   }
 
   const isBreak = slot.tag === "пауза" || slot.tag === "свободно" || slot.tag === "вечер";
@@ -1236,25 +1426,29 @@ renderPushBox();
 initServiceWorker().then(refreshPushState);
 initSync();
 
-/* идущий таймер обновляем раз в секунду — только цифру, без полной перерисовки */
+/* идущие таймеры обновляем раз в секунду — только цифры, без полной перерисовки */
 function tickTimerLabel() {
-  if (!state.timer) return;
-  if (state.timer.date !== selectedDate) return;
-  const id = state.timer.block;
-  const card = document.querySelector(`.block[data-id="${id}"]`);
-  if (!card) return;
+  const running = runningTimers();
+  if (!running.length) return;
 
-  const spent = hoursFor(selectedDate, id);
-  const live = spent + timerElapsedMin();
-  const label = card.querySelector(".time-value");
-  if (label) {
-    label.textContent = fmtMinutes(live);
-    label.classList.add("has", "ticking");
-  }
+  running.forEach((t) => {
+    if (t.date !== selectedDate) {
+      /* таймер идёт в другом дне — цифры тут не наши, но плашки «сейчас» живут всегда */
+      if (typeof renderNow === "function") renderNow();
+      return;
+    }
+    const card = document.querySelector(`.block[data-id="${t.block}"]`);
+    if (!card) return;
 
-  /* Перешли порог по ходу таймера — плашка должна загореться сама, без перезагрузки.
-     Рисуем состояние прямо здесь: время ещё не записано, поэтому из state его не видно. */
-  applyLiveLevel(card, id, live);
+    const live = hoursFor(selectedDate, t.block);
+    const label = card.querySelector(".time-value");
+    if (label) {
+      label.textContent = fmtMinutes(live);
+      label.classList.add("has", "ticking");
+    }
+    /* Перешли порог по ходу таймера — плашка должна загореться сама. */
+    applyLiveLevel(card, t.block, live);
+  });
 }
 
 /* Плашки уровней и рамка карточки по «живому» времени (записанное + таймер). */
@@ -1279,10 +1473,10 @@ setInterval(tickTimerLabel, 1000);
 /* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
 setInterval(() => {
   renderNow();
-  const nowKey = keyOf(new Date());
   const panel = document.getElementById("panel-day");
   if (panel && panel.classList.contains("active")) renderTimeline();
-  if (selectedDate === nowKey) renderBlocks();
+  /* идущий таймер мог пересечь порог — перерисовываем блоки, даже без клика */
+  if (runningTimers().length) renderBlocks();
 }, 30000);
 
 document.addEventListener("visibilitychange", () => {

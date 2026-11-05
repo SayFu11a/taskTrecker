@@ -40,6 +40,42 @@ const TEST_SLOT = {
   body: "Это проверка. Настоящие напоминания придут в начале блока.",
 };
 
+/* Минимальный порог блока из data.js (mins.min) — «сделано» = натикало хотя бы столько. */
+const MIN_MINUTES: Record<string, number> = {
+  ulbi: 20,
+  interviews: 10,
+  leetcode: 10,
+  jobs: 10,
+  news: 5,
+  review: 5,
+  sport: 7,
+};
+
+/* Старые уровни → какой порог считать сделанным. Для «сделано» достаточно
+   минимума, поэтому любая отметка закрывает блок. */
+const LEGACY_DONE: Record<string, boolean> = { min: true, norm: true, max: true };
+
+/* Запись блока в базе: { min, timer? } (новый формат) или просто число (старый). */
+function minutesOfRecord(rec: unknown): number {
+  if (typeof rec === "number") return rec > 0 ? rec : 0;
+  if (rec && typeof rec === "object" && "min" in rec) {
+    const m = Number((rec as { min: unknown }).min);
+    return Number.isFinite(m) && m > 0 ? m : 0;
+  }
+  return 0;
+}
+
+/* Минуты идущего таймера — чтобы не напоминать о том, чем человек занят прямо сейчас. */
+function runningMinutes(rec: unknown): number {
+  if (!rec || typeof rec !== "object") return 0;
+  const timer = (rec as { timer?: { startedAt?: string } }).timer;
+  const startedAt = timer?.startedAt;
+  if (!startedAt) return 0;
+  const ts = new Date(startedAt).getTime();
+  if (!Number.isFinite(ts)) return 0;
+  return Math.max(0, Math.floor((Date.now() - ts) / 60_000));
+}
+
 const minutesOf = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -75,8 +111,15 @@ Deno.serve(async (req) => {
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data.user) return json({ error: "токен не принят" }, 401);
     onlyUserId = data.user.id;
-  } else if (!isCron && !dry) {
-    return json({ error: "нужен токен: крон — секрет, человек — вход через Google" }, 401);
+  } else if (!isCron) {
+    /* Раньше здесь без токена пропускался ?dry=1, а ?force=1 — нет: диагностика
+       остаётся открытой, но принудительную отправку может дёрнуть только крон,
+       иначе любой человек мог бы рассылать push всем подписчикам. */
+    if (!dry) return json({ error: "нужен токен: крон — секрет, человек — вход через Google" }, 401);
+  }
+
+  if (force && !isCron && !isTest) {
+    return json({ error: "принудительная отправка — только по секрету крона" }, 403);
   }
 
   /* Московское «сейчас» */
@@ -113,15 +156,27 @@ Deno.serve(async (req) => {
   const skip = new Set<string>();
   const ids = [...new Set((subs ?? []).map((r) => r.user_id as string))];
   if (ids.length && slot.block !== "__test__") {
+    /* Читаем минуты (hours), а не старые уровни (blocks): трекер пишет время.
+       Блок считаем сделанным, если минут набралось хотя бы на его «минимум».
+       Идущий таймер тоже считается — прибавляем его минуты к записанным. */
     const { data: days } = await supabase
       .from("days")
-      .select("user_id, blocks")
+      .select("user_id, hours, blocks")
       .eq("date", dateKey)
       .in("user_id", ids);
 
+    const minNeed = MIN_MINUTES[slot.block] ?? 0;
+
     for (const row of days ?? []) {
-      const blocks = (row.blocks ?? {}) as Record<string, string>;
-      if (blocks[slot.block]) skip.add(row.user_id as string);
+      const userId = row.user_id as string;
+      const hours = (row.hours ?? {}) as Record<string, unknown>;
+      let minutes = minutesOfRecord(hours[slot.block]) + runningMinutes(hours[slot.block]);
+
+      /* строки, записанные до перехода на минуты, содержат только blocks с уровнями */
+      const legacy = (row.blocks ?? {}) as Record<string, string>;
+      if (!minutes && LEGACY_DONE[legacy[slot.block]]) minutes = minNeed;
+
+      if (minutes >= minNeed && minutes > 0) skip.add(userId);
     }
   }
 
