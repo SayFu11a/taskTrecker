@@ -2,8 +2,8 @@
    Пока ключи не вписаны — модуль молча выключен, сайт работает локально.
    Никакая ошибка сети не должна ломать трекер: всё в try/catch. */
 
-const SUPABASE_URL = ""; // например https://xxxxxxxx.supabase.co
-const SUPABASE_ANON_KEY = ""; // anon public key из настроек проекта
+const SUPABASE_URL = "https://dzgututxrglgvcvduqqx.supabase.co"; // например https://xxxxxxxx.supabase.co
+const SUPABASE_ANON_KEY = "sb_publishable_iYTOoi7jGnBydA4yfbdivA_IWUs-PDb"; // anon public key из настроек проекта
 
 const SYNC_PENDING_KEY = "vp-tracker-pending";
 
