@@ -3,15 +3,15 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v7";
+const BUILD_LABEL = "сборка v8";
 
 const DEFAULT_STATE = {
-  days: {},        // { "2026-11-04": { ulbi: "norm", ... } }
+  days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
   modes: {},       // { "2026-11-04": "bad" | "norm" | "good" }
   gym: {},         // { "1": { mon: true, wed: false, fri: true } }
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
-  hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — минуты вручную/таймером
+  hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — единственный источник: минуты
   timer: null,      // { block, date, startedAt } — идёт прямо сейчас
   scheduleView: "detail", // "detail" | "coarse"
   achievements: {}, // { id: ISO-дата открытия }
@@ -25,6 +25,37 @@ const cloneDeep = (obj) =>
     : JSON.parse(JSON.stringify(obj));
 
 let state = load();
+
+/* ── Однократная миграция: раньше уровень был отдельной отметкой,
+   теперь единственный источник — минуты. Старые «отмечено» не теряем:
+   выставляем минимальный порог блока, дальше человек добавит реальное время. */
+(function migrateLevelsToMinutes() {
+  if (state.hoursMigratedV1) return;
+  state.hours = state.hours || {};
+  let moved = 0;
+
+  Object.keys(state.days || {}).forEach((date) => {
+    const blocks = state.days[date] || {};
+    Object.keys(blocks).forEach((id) => {
+      const level = blocks[id];
+      if (!LEVEL_ORDER[level]) return;
+      const day = state.hours[date] || (state.hours[date] = {});
+      const need = minutesForLevel(id, level);
+      if (!day[id] && need) {
+        day[id] = need;
+        moved++;
+      }
+    });
+  });
+
+  /* Старое хранилище уровней больше не нужно — чтобы никто случайно не читал его снова. */
+  delete state.days;
+  state.hoursMigratedV1 = true;
+  if (moved) {
+    saveLocalOnly();
+    console.log("Мигрировано отметок в минуты:", moved);
+  }
+})();
 let selectedDate = todayKey();
 
 /* ─────────────── утилиты ─────────────── */
@@ -94,9 +125,39 @@ function fmtShort(min) {
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
 }
 
+/* Что показать как «уровень»: считается из минут, отдельно не хранится. */
+function levelOf(dateKey, blockId) {
+  return levelFromMinutes(blockId, hoursFor(dateKey, blockId));
+}
+
 function hoursFor(dateKey, blockId) {
   const day = (state.hours || {})[dateKey] || {};
   return blockId ? day[blockId] || 0 : Object.values(day).reduce((a, b) => a + b, 0);
+}
+
+/* Старое хранилище: { ulbi: "norm" } → { ulbi: 120 } по порогам блока.
+   Нужно, чтобы дни, отмеченные до перехода, не обнулились при синхронизации. */
+function hoursFromLegacyLevels(blocks) {
+  const out = {};
+  Object.keys(blocks || {}).forEach((id) => {
+    const level = blocks[id];
+    const need = LEVEL_ORDER[level] ? minutesForLevel(id, level) : 0;
+    if (need) out[id] = need;
+  });
+  return out;
+}
+
+/* «Отметить уровень» = поставить ровно столько минут, сколько нужно порогу.
+   Одно действие, одно поле в базе. */
+function setBlockMinutes(dateKey, blockId, minutes) {
+  if (!state.hours) state.hours = {};
+  const day = state.hours[dateKey] || (state.hours[dateKey] = {});
+  const next = Math.max(0, Math.round(minutes || 0));
+  if (!next) delete day[blockId];
+  else day[blockId] = next;
+  if (!Object.keys(day).length) delete state.hours[dateKey];
+  touchDay(dateKey);
+  save();
 }
 
 function addHours(dateKey, blockId, deltaMin) {
@@ -186,11 +247,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
 }
 
-function dayData(key) {
-  if (!state.days[key]) state.days[key] = {};
-  return state.days[key];
-}
-
+/* Данные дня = минуты по блокам. Отдельного «уровня» в базе больше нет. */
 /* Отметка времени изменения дня — по ней синхронизация решает,
    чья версия свежее (телефон или компьютер). */
 function touchDay(key) {
@@ -202,22 +259,21 @@ function modeFor(key) {
   return state.modes[key] || "norm";
 }
 
-const LEVEL_ORDER = { min: 1, norm: 2, max: 3 };
-
 /* ─────────────── дневной чек-лист ─────────────── */
 
 const blocksRoot = document.getElementById("blocks");
 const tipsState = new Set();
 
 function renderBlocks() {
-  const data = dayData(selectedDate);
   blocksRoot.innerHTML = "";
 
   BLOCKS.forEach((b) => {
-    const lvl = data[b.id];
     const future = isFutureDate(selectedDate);
+    const minutes = hoursFor(selectedDate, b.id);
+    const lvl = levelFromMinutes(b.id, minutes);
     const card = el("div", "block" + (lvl ? " done" : "") + (future ? " future" : ""));
     card.dataset.id = b.id;
+    card.dataset.level = lvl || "";
 
     const top = el("div", "block-top");
     top.innerHTML = `
@@ -227,36 +283,50 @@ function renderBlocks() {
         <div class="block-desc">${b.desc}</div>
       </div>`;
 
+    /* Плашки уровней — индикатор, а не отдельная отметка.
+       Загораются сами, когда минут набралось на порог. Клик ставит время. */
     const pick = el("div", "level-pick");
-    ["min", "norm", "max"].forEach((level) => {
+    const order = ["min", "norm", "max"];
+    const reached = lvl ? LEVEL_ORDER[lvl] : 0;
+
+    order.forEach((level) => {
+      const isOn = reached >= LEVEL_ORDER[level];
+      const isCurrent = lvl === level;
       const btn = el(
         "button",
-        "level-btn" + (lvl === level ? " on" : ""),
+        "level-btn" + (isOn ? " on" : "") + (isCurrent ? " current" : ""),
         `${LEVEL_LABEL[level]}<small>${b[level]}</small>`
       );
       btn.dataset.lvl = level;
       btn.type = "button";
+      btn.title =
+        `Поставить ${fmtMinutes(minutesForLevel(b.id, level))} — от этого загорится «${LEVEL_LABEL[level].toLowerCase()}»`;
+
       btn.addEventListener("click", () => {
-        const d = dayData(selectedDate);
-        if (d[b.id] === level) delete d[b.id];
-        else d[b.id] = level;
-        touchDay(selectedDate);
-        save();
-        renderAll();
-        if (d[b.id]) {
-          play(level === "min" ? "mark" : "markGood");
-          /* Первая отметка в будущем дне — честно говорим, что попадёт в статистику. */
-          if (isFutureDate(selectedDate)) {
-            toast("Отмечено на будущую дату. Пока этот день не наступил, статистика считает его закрытым.");
-            return;
-          }
-          const msgs = {
-            min: "Минимум засчитан. Этого уже достаточно.",
-            norm: "Норма дня. Хорошая работа.",
-            max: "Максимум — сильно. Но не превращай это в норму.",
-          };
-          toast(msgs[level]);
+        const need = minutesForLevel(b.id, level);
+        /* Никогда не отнимаем время: если его уже больше порога — просто говорим об этом.
+           Иначе «минимум» затирал бы реальные 2 часа работы. */
+        if (minutes >= need) {
+          toast(
+            `«${b.name}»: уже ${fmtMinutes(minutes)} — это ${LEVEL_LABEL[levelFromMinutes(b.id, minutes)].toLowerCase()}.`
+          );
+          return;
         }
+        const delta = need - minutes;
+        addHours(selectedDate, b.id, delta);
+        const after = levelFromMinutes(b.id, hoursFor(selectedDate, b.id));
+        renderAll();
+        play(level === "min" ? "mark" : "markGood");
+        if (isFutureDate(selectedDate)) {
+          toast("Отмечено на будущую дату. Пока этот день не наступил, статистика считает его закрытым.");
+          return;
+        }
+        const msgs = {
+          min: "Минимум засчитан. Этого уже достаточно.",
+          norm: "Норма дня. Хорошая работа.",
+          max: "Максимум — сильно. Но не превращай это в норму.",
+        };
+        toast(msgs[after || level]);
       });
       pick.appendChild(btn);
     });
@@ -365,9 +435,8 @@ function renderTimeRow(b) {
 const closedCelebrated = new Set();
 
 function dayScore(key) {
-  const data = state.days[key] || {};
   const target = MODE_TARGET[modeFor(key)];
-  const values = BLOCKS.map((b) => LEVEL_ORDER[data[b.id]] || 0);
+  const values = BLOCKS.map((b) => LEVEL_ORDER[levelOf(key, b.id)] || 0);
   const got = values.reduce((s, v) => s + Math.min(v, target), 0);
   const total = BLOCKS.length * target;
   return { pct: total ? got / total : 0, done: values.filter(Boolean).length, target };
@@ -467,10 +536,10 @@ function streak() {
   let n = 0;
   let cursor = todayKey();
   // если сегодня ещё ничего нет — стрик не рвём, начинаем со вчера
-  if (!(state.days[cursor] && Object.keys(state.days[cursor]).length)) {
+  if (!(hoursFor(cursor) > 0)) {
     cursor = shiftDay(cursor, -1);
   }
-  while (state.days[cursor] && Object.keys(state.days[cursor]).length) {
+  while (hoursFor(cursor) > 0) {
     n++;
     cursor = shiftDay(cursor, -1);
   }
@@ -478,7 +547,7 @@ function streak() {
 }
 
 function closedDays() {
-  return Object.values(state.days).filter((d) => d && Object.keys(d).length).length;
+  return Object.keys(state.hours || {}).filter((k) => hoursFor(k) > 0).length;
 }
 
 function renderHero() {
@@ -770,12 +839,11 @@ function renderNow() {
   let blockLine = "";
   if (slot.block) {
     const block = BLOCKS.find((b) => b.id === slot.block);
-    const data = state.days[nowKey] || {};
-    const done = data[slot.block];
+    const done = levelOf(nowKey, slot.block);
     const target = targetLevelFor(nowKey);
     if (block) {
       blockLine = done
-        ? `<button class="now-done is-done" disabled>✓ Отмечено: ${LEVEL_TEXT[done]} · ${block[done]}</button>`
+        ? `<button class="now-done is-done" disabled>✓ ${LEVEL_TEXT[done]} · ${fmtMinutes(hoursFor(nowKey, slot.block))}</button>`
         : `<button class="now-done" data-mark="${slot.block}" data-level="${target}">Отметить ${LEVEL_TEXT[target]} · ${block[target]}</button>`;
     }
   }
@@ -809,12 +877,11 @@ function renderNow() {
   const btn = root.querySelector("[data-mark]");
   if (btn) {
     btn.addEventListener("click", () => {
-      const data = dayData(nowKey);
       const id = btn.dataset.mark;
       const level = btn.dataset.level;
-      data[id] = level;
-      touchDay(nowKey);
-      save();
+      /* Догоняем до порога, но никогда не отнимаем уже накопленное время. */
+      const need = minutesForLevel(id, level);
+      if (hoursFor(nowKey, id) < need) setBlockMinutes(nowKey, id, need);
       if (selectedDate !== nowKey) {
         selectedDate = nowKey;
         dateInput.value = selectedDate;
@@ -834,7 +901,6 @@ function renderTimeline() {
   const now = new Date();
   const nowKey = keyOf(now);
   const active = selectedDate === nowKey ? slotNow(now) : null;
-  const data = state.days[selectedDate] || {};
   const target = targetLevelFor(selectedDate);
 
   root.innerHTML = "";
@@ -871,7 +937,7 @@ function renderTimeline() {
       "div",
       "tl-row" + (isNow ? " is-now" : "") + (slot.tag === "глубоко" ? " strong" : "") + (isPast ? " is-past" : "")
     );
-    const done = slot.block && data[slot.block];
+    const done = slot.block ? levelOf(selectedDate, slot.block) : null;
     row.innerHTML = `
       <span class="tl-time">${slot.from}<small>–${slot.to}</small></span>
       <span class="tl-label">${slot.icon ? `<span class="tl-ico">${slot.icon}</span>` : ""}${slot.label}${
@@ -893,11 +959,11 @@ function renderTimeline() {
 function renderProgress() {
   const cd = closedDays();
   const days30 = lastNKeys(30);
-  const marked30 = days30.filter((k) => state.days[k] && Object.keys(state.days[k]).length).length;
+  const marked30 = days30.filter((k) => hoursFor(k) > 0).length;
   const gyms = Object.values(state.gym).reduce((s, w) => s + Object.values(w).filter(Boolean).length, 0);
   const minDays = days30.filter((k) => {
-    const d = state.days[k] || {};
-    return Object.values(d).length > 0 && Object.values(d).every((v) => v === "min");
+    const levels = BLOCKS.map((b) => levelOf(k, b.id)).filter(Boolean);
+    return levels.length > 0 && levels.every((v) => v === "min");
   }).length;
 
   const todayMin = hoursFor(todayKey());
@@ -964,8 +1030,7 @@ function renderHeatmap() {
 
   for (let i = 0; i < total; i++) {
     const key = shiftDay(start, i);
-    const d = state.days[key] || {};
-    const count = Object.values(d).length;
+    const count = BLOCKS.filter((b) => hoursFor(key, b.id) > 0).length;
     const lvl = count === 0 ? 0 : count <= 2 ? 1 : count <= 4 ? 2 : 3;
 
     const cell = el("button", `heat l${lvl}` + (key === today ? " today" : ""));
@@ -986,7 +1051,7 @@ function renderBars() {
   const keys = lastNKeys(30);
   const root = document.getElementById("bars");
   root.innerHTML = BLOCKS.map((b) => {
-    const n = keys.filter((k) => state.days[k] && state.days[k][b.id]).length;
+    const n = keys.filter((k) => hoursFor(k, b.id) > 0).length;
     const pct = Math.round((n / 30) * 100);
     return `<div class="bar-row">
       <span class="bar-name">${b.icon} ${b.name}</span>
@@ -1175,11 +1240,39 @@ initSync();
 function tickTimerLabel() {
   if (!state.timer) return;
   if (state.timer.date !== selectedDate) return;
-  const card = document.querySelector(`.block[data-id="${state.timer.block}"] .time-value`);
+  const id = state.timer.block;
+  const card = document.querySelector(`.block[data-id="${id}"]`);
   if (!card) return;
-  const spent = hoursFor(selectedDate, state.timer.block);
-  card.textContent = fmtMinutes(spent + timerElapsedMin());
-  card.classList.add("has", "ticking");
+
+  const spent = hoursFor(selectedDate, id);
+  const live = spent + timerElapsedMin();
+  const label = card.querySelector(".time-value");
+  if (label) {
+    label.textContent = fmtMinutes(live);
+    label.classList.add("has", "ticking");
+  }
+
+  /* Перешли порог по ходу таймера — плашка должна загореться сама, без перезагрузки.
+     Рисуем состояние прямо здесь: время ещё не записано, поэтому из state его не видно. */
+  applyLiveLevel(card, id, live);
+}
+
+/* Плашки уровней и рамка карточки по «живому» времени (записанное + таймер). */
+function applyLiveLevel(card, blockId, minutes) {
+  const level = levelFromMinutes(blockId, minutes);
+  const reached = level ? LEVEL_ORDER[level] : 0;
+  const changed = (card.dataset.level || "") !== (level || "");
+  card.dataset.level = level || "";
+  card.classList.toggle("done", Boolean(level));
+
+  card.querySelectorAll(".level-btn").forEach((btn) => {
+    const lvl = btn.dataset.lvl;
+    btn.classList.toggle("on", reached >= LEVEL_ORDER[lvl]);
+    btn.classList.toggle("current", lvl === level);
+  });
+
+  /* Плашка «Сейчас» и полосы прогресса тоже не должны отставать. */
+  if (changed) renderProgress();
 }
 setInterval(tickTimerLabel, 1000);
 
@@ -1189,7 +1282,7 @@ setInterval(() => {
   const nowKey = keyOf(new Date());
   const panel = document.getElementById("panel-day");
   if (panel && panel.classList.contains("active")) renderTimeline();
-  if (selectedDate === nowKey && state.days[nowKey]) renderBlocks();
+  if (selectedDate === nowKey) renderBlocks();
 }, 30000);
 
 document.addEventListener("visibilitychange", () => {

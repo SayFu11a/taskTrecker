@@ -12,6 +12,7 @@ const BLOCKS = [
     id: "ulbi",
     icon: "🎓",
     name: "Ulbi TV + практика",
+    mins: { min: 20, norm: 120, max: 180 },
     desc: "Основной учебный маршрут. Один курс, без прыжков между темами.",
     min: "20 мин",
     norm: "2 ч",
@@ -24,6 +25,7 @@ const BLOCKS = [
   },
   {
     id: "interviews",
+    mins: { min: 10, norm: 45, max: 90 },
     icon: "🗣️",
     name: "Подготовка к собеседованиям",
     desc: "Одна тема в день: JS, React, TS, браузер, архитектура.",
@@ -38,6 +40,7 @@ const BLOCKS = [
   },
   {
     id: "leetcode",
+    mins: { min: 10, norm: 30, max: 60 },
     icon: "🧩",
     name: "LeetCode",
     desc: "Одна задача. Сначала честные 20–30 минут сам.",
@@ -52,6 +55,7 @@ const BLOCKS = [
   },
   {
     id: "jobs",
+    mins: { min: 10, norm: 45, max: 60 },
     icon: "📮",
     name: "hh.ru и вакансии",
     desc: "Поиск работы — отдельная задача, а не «когда всё выучу».",
@@ -66,6 +70,7 @@ const BLOCKS = [
   },
   {
     id: "news",
+    mins: { min: 5, norm: 20, max: 40 },
     icon: "📡",
     name: "Новости Frontend и рынок",
     desc: "React, TypeScript, инструменты, AI, состояние рынка.",
@@ -80,6 +85,7 @@ const BLOCKS = [
   },
   {
     id: "review",
+    mins: { min: 5, norm: 30, max: 60 },
     icon: "🔁",
     name: "Повторение / проект",
     desc: "Своя практика и закрепление того, что уже проходил.",
@@ -94,6 +100,7 @@ const BLOCKS = [
   },
   {
     id: "sport",
+    mins: { min: 7, norm: 30, max: 60 },
     icon: "💪",
     name: "Физическая активность",
     desc: "По плану недели: тренировка A / B, прогулка или отдых.",
@@ -109,7 +116,27 @@ const BLOCKS = [
 ];
 
 const LEVEL_LABEL = { min: "Минимум", norm: "Норма", max: "Максимум" };
+const LEVEL_ORDER = { min: 1, norm: 2, max: 3 };
 const MODE_TARGET = { bad: 1, norm: 2, good: 3 };
+
+/* Уровень — не хранится отдельно, а считается из фактических минут.
+   Единственный источник истины: сколько реально потратил.
+   mins в каждом блоке задаёт пороги: 20 мин → «минимум», 2 ч → «норма», 3 ч → «максимум». */
+function levelFromMinutes(blockId, minutes) {
+  const block = BLOCKS.find((b) => b.id === blockId);
+  if (!block || !block.mins || !minutes) return null;
+  const t = block.mins;
+  if (minutes >= t.max) return "max";
+  if (minutes >= t.norm) return "norm";
+  if (minutes >= t.min) return "min";
+  return null;
+}
+
+/* Сколько минут нужно для уровня — для подсказок в кнопках */
+function minutesForLevel(blockId, level) {
+  const block = BLOCKS.find((b) => b.id === blockId);
+  return block && block.mins ? block.mins[level] : 0;
+}
 const MODES = {
   bad: { label: "Плохой день", hint: "Цель — просто что-то сделать. Минимум по блокам." },
   norm: { label: "Обычный день", hint: "Цель — норма по блокам. Так выглядит большинство дней." },

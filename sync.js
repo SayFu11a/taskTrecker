@@ -111,27 +111,32 @@ async function signOut() {
 /* ─────────── чтение / запись ─────────── */
 
 function hasLocalData() {
-  const d = state.days || {};
-  return Object.keys(d).length > 0 || (state.leetcode || []).length > 0;
+  const h = state.hours || {};
+  return Object.keys(h).length > 0 || (state.leetcode || []).length > 0;
 }
 
 /* Разложить состояние на строки dto для таблиц. */
 function stateToRows(userId) {
   const meta = state.meta || {};
-  const rows = Object.keys(state.days || {}).map((date) => ({
+  /* Отправляем только те дни, где есть реальные минуты.
+     Уровни больше не хранятся: они считаются из часов на любом устройстве. */
+  const dates = Object.keys(state.hours || {}).filter((d) => {
+    const day = state.hours[d] || {};
+    return Object.values(day).some((m) => m > 0);
+  });
+
+  return dates.map((date) => ({
     user_id: userId,
     date,
-    blocks: state.days[date],
-    hours: (state.hours || {})[date] || {},
+    hours: state.hours[date],
     mode: (state.modes || {})[date] || null,
     updated_at: new Date(meta[date] || Date.now()).toISOString(),
   }));
-  return rows;
 }
 
 /* Собрать состояние из строк сервера, слив с локальным по времени. */
 function mergeRowsIntoState(rows) {
-  state.days = state.days || {};
+  /* state.days здесь не нужен: уровни больше не хранятся, только минуты. */
   state.modes = state.modes || {};
   state.meta = state.meta || {};
 
@@ -140,13 +145,18 @@ function mergeRowsIntoState(rows) {
     const localTs = state.meta[row.date] || 0;
 
     if (remoteTs > localTs) {
-      state.days[row.date] = row.blocks || {};
       if (row.mode) state.modes[row.date] = row.mode;
-      /* часы приходят отдельным полем; старые строки его не содержат */
+
+      /* Часы — единственный источник. Старые строки (до перехода) содержат
+         только blocks с уровнями: переводим их в минуты по порогам блока. */
+      state.hours = state.hours || {};
       if (row.hours && Object.keys(row.hours).length) {
-        state.hours = state.hours || {};
         state.hours[row.date] = row.hours;
+      } else if (row.blocks && typeof hoursFromLegacyLevels === "function") {
+        const legacy = hoursFromLegacyLevels(row.blocks);
+        if (legacy && Object.keys(legacy).length) state.hours[row.date] = legacy;
       }
+
       state.meta[row.date] = remoteTs;
     }
   });

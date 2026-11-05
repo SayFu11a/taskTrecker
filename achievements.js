@@ -4,11 +4,8 @@
 
 /* Сводка прогресса для проверки условий. */
 function achievementProgress() {
-  const dayKeys = Object.keys(state.days || {}).filter(
-    (k) => state.days[k] && Object.keys(state.days[k]).length
-  );
-
-  const LEVEL_ORDER = { min: 1, norm: 2, max: 3 };
+  /* Единственный источник — минуты. Уровень считается из них. */
+  const dayKeys = Object.keys(state.hours || {}).filter((k) => hoursFor(k) > 0);
 
   let fullNormDays = 0;
   let minDays = 0;
@@ -17,10 +14,8 @@ function achievementProgress() {
   let blockJobs = 0;
 
   dayKeys.forEach((key) => {
-    const data = state.days[key];
-    const levels = Object.keys(data)
-      .map((id) => LEVEL_ORDER[data[id]] || 0)
-      .filter(Boolean);
+    const levels = BLOCKS.map((b) => levelOf(key, b.id)).filter(Boolean)
+      .map((l) => LEVEL_ORDER[l] || 0);
 
     const marked = levels.length;
     maxBlocksInDay = Math.max(maxBlocksInDay, marked);
@@ -28,8 +23,8 @@ function achievementProgress() {
     if (marked === BLOCKS.length && levels.every((l) => l >= 2)) fullNormDays++;
     if (marked > 0 && levels.every((l) => l === 1)) minDays++;
 
-    if (data.interviews) blockInterviews++;
-    if (data.jobs) blockJobs++;
+    if (levelOf(key, "interviews")) blockInterviews++;
+    if (levelOf(key, "jobs")) blockJobs++;
   });
 
   const gymDone = Object.values(state.gym || {}).reduce(
@@ -52,8 +47,8 @@ function achievementProgress() {
 
 /* Самая длинная серия подряд идущих закрытых дней. */
 function bestStreak() {
-  const keys = Object.keys(state.days || {})
-    .filter((k) => state.days[k] && Object.keys(state.days[k]).length)
+  const keys = Object.keys(state.hours || {})
+    .filter((k) => hoursFor(k) > 0)
     .sort();
 
   let best = 0;
