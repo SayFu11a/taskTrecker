@@ -1777,9 +1777,12 @@ input::placeholder { color: #626880; }
    Масштабируем transform'ом, а не размером шрифта: размеры элемента не меняются,
    поэтому соседние строки не сдвигаются. */
 .tl-namaz:hover .tl-namaz-inner,
-/* контент НЕ масштабируем целиком: иначе вокруг лупы получается ровное
-   увеличение и не видно, что лупа «идёт» по блоку */
-.tl-namaz-inner { position: relative; z-index: 2; }
+.tl-namaz.is-lit .tl-namaz-inner {
+  transform: scale(1.06);
+  transform-origin: left center;
+  transition: transform 0.2s ease;
+}
+.tl-namaz-inner { transition: transform 0.2s ease; }
 .tl-namaz:hover .tl-namaz-title,
 .tl-namaz.is-lit .tl-namaz-title {
   color: #fff4dc;
@@ -1815,138 +1818,6 @@ input::placeholder { color: #626880; }
   font-size: 10px; color: #ffd68a; text-transform: lowercase;
 }
 .tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 3; color: #a9f0dc; font-weight: 700; }
-
-/* ─────────── ЛУПА (рыбий глаз) ───────────
-   Как это работает и почему не тормозит:
-   · под элемент ничего не читаем — ни backdrop-filter, ни SVG-дисплейсмента.
-     Это самые дорогие операции (перечитывают пиксели под слоем каждый кадр,
-     а в Safari/Firefox дисплейсмент вообще не работает);
-   · блок один раз клонируется в слой-лупу и дальше живёт как обычная картинка;
-   · при движении мыши меняются только transform у двух контейнеров —
-     это делает композитор GPU, без layout и без перерисовки;
-   · круг делается статичной маской (считается один раз), внутри круга
-     клон чуть повёрнут (rotateY) — отсюда линзовый, «рыбий глаз» край;
-   · крупный текст даёт лупа, а не глобальный scale: блок по-прежнему
-     приподнимается, но увеличение теперь локальное — под курсором. */
-.tl-namaz-clone {
-  /* у клона не должно быть сдвига/масштаба всего блока — масштабирует лупа */
-  transform: none !important;
-  margin: 0;
-  animation: none;
-  cursor: default;
-  /* фон блока полупрозрачный: в лупе сквозь него просвечивал бы оригинал
-     и текст двоился. Копия рисуется на плотной подложке того же цвета. */
-  background:
-    linear-gradient(90deg, rgba(255, 199, 102, 0.14), rgba(255, 199, 102, 0.03) 60%),
-    #16130d;
-}
-
-.tl-namaz-lens-source { position: relative; }
-
-.tl-namaz-lens {
-  position: fixed;
-  inset: 0;
-  z-index: 45;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.22s ease;
-}
-.tl-namaz-lens.on { opacity: 1; }
-
-/* следит за курсором: без transition, поэтому не «плывёт» */
-.lens-follow {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform: translate3d(var(--lens-x, -999px), var(--lens-y, -999px), 0);
-  will-change: transform;
-}
-
-/* стекло: круг с мягкой кромкой */
-.lens-ring {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 300px;
-  height: 300px;
-  margin: -150px 0 0 -150px;
-  border-radius: 50%;
-  overflow: hidden;
-  -webkit-mask-image: radial-gradient(closest-side, #000 82%, rgba(0, 0, 0, 0.9) 92%, transparent 100%);
-  mask-image: radial-gradient(closest-side, #000 82%, rgba(0, 0, 0, 0.9) 92%, transparent 100%);
-  box-shadow:
-    0 0 0 1px rgba(255, 214, 140, 0.28) inset,
-    0 0 26px rgba(255, 190, 90, 0.22);
-  transform: scale(0.72);
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform;
-}
-.tl-namaz-lens.on .lens-ring { transform: scale(1); }
-
-/* грав-линза: фильтр feDisplacementMap применяем к КОНТЕЙНЕРУ,
-   а не к тексту — иначе поехали бы глифы по отдельности.
-   Контейнер квадратный и постоянного размера (фильтр не расширяется), клон
-   внутри отцентрован; увеличение делаем transform'ом контейнера. */
-.lens-warp {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 1024px;
-  height: 1024px;
-  margin: -512px 0 0 -512px;
-  filter: url(#namazLensWarp);
-  will-change: transform;
-  transform: scale(1);
-}
-.lens-warp .lens-inner {
-  left: 50%;
-  top: 50%;
-  margin-left: -196px;
-  margin-top: -32px;
-}
-body:not(.lens-ok) .lens-warp { filter: none; }
-
-/* клон блока: компенсируем положение курсора и увеличиваем */
-.lens-inner {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform-origin: 0 0;
-  transform:
-    translate3d(calc(-1 * var(--lx, 0px)), calc(-1 * var(--ly, 0px)), 0)
-    scale(var(--lens-zoom, 1.7));
-  will-change: transform;
-}
-
-/* «кривизна стекла»: по кромке круга содержимое темнеет и ловит свет.
-   Это статичный градиент — рисуется один раз, на кадры не влияет. */
-.lens-bend {
-  position: absolute;
-  inset: 0;
-}
-.lens-bend::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  pointer-events: none;
-  background:
-    radial-gradient(
-      closest-side,
-      transparent 42%,
-      rgba(255, 208, 130, 0.05) 62%,
-      rgba(255, 186, 90, 0.10) 78%,
-      rgba(120, 78, 20, 0.22) 92%,
-      rgba(40, 26, 8, 0.34) 100%
-    ),
-    radial-gradient(
-      circle at 32% 26%,
-      rgba(255, 246, 222, 0.14),
-      transparent 42%
-    );
-}
 
 /* кусок обычного блока, который начинается после намаза */
 .tl-row.is-cont { opacity: 0.92; background: rgba(255, 255, 255, 0.02); }
