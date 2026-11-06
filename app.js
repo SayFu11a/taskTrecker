@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v15";
+const BUILD_LABEL = "сборка v16";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1603,22 +1603,27 @@ function renderTimeline() {
       });
 
       const prepMin = minutesOf(row.at) - minutesOf(row.prep);
+      /* слои света отдельно, контент — в .tl-namaz-inner поверх них,
+         чтобы текст всегда оставался читаемым */
       step.innerHTML = `
+        <span class="tl-namaz-flame2" aria-hidden="true"></span>
         <span class="tl-namaz-glow" aria-hidden="true"></span>
-        <span class="tl-namaz-steps" aria-hidden="true">
-          <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
-        </span>
-        <span class="tl-namaz-main">
-          <span class="tl-namaz-title">${row.icon} ${row.label}</span>
-          <span class="tl-namaz-times">
-            <b>${row.at}</b>
-            <small>${row.prep} подготовка · ${row.until || ""}</small>
+        <span class="tl-namaz-inner">
+          <span class="tl-namaz-steps" aria-hidden="true">
+            <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
           </span>
-        </span>
-        <span class="tl-namaz-scale">
-          <span>${row.prep}</span>
-          <span class="mid">${row.at}</span>
-          <span>${row.end}</span>
+          <span class="tl-namaz-main">
+            <span class="tl-namaz-title">${row.icon} ${row.label}</span>
+            <span class="tl-namaz-times">
+              <b>${row.at}</b>
+              <small>${row.prep} подготовка · ${row.until || ""}</small>
+            </span>
+          </span>
+          <span class="tl-namaz-scale">
+            <span>${row.prep}</span>
+            <span class="mid">${row.at}</span>
+            <span>${row.end}</span>
+          </span>
         </span>
         ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
         ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
