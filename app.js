@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v18";
+const BUILD_LABEL = "сборка v19";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1147,43 +1147,70 @@ function cutInterval(piece, ev) {
 }
 
 /* ─────────── волнистый край блока намаза ───────────
-   Край блока — крупные круглые волны по всему периметру (как на референсе).
-   Одна линия, ничего второго: это и есть граница блока. */
-function namazWavePath(w, h) {
-  const BULGE = 4.2;   // насколько волна выступает наружу
-  const WAVE = 17;     // длина одной волны
-  const PAD = BULGE + 1;
-  const x0 = PAD;
-  const y0 = PAD;
-  const x1 = w - PAD;
-  const y1 = h - PAD;
+   Край блока — крупные круглые волны (как на референсе).
+   Волны физически бегут по периметру: путь пересчитывается по фазе,
+   а SVG-анимация морфит между фазами — гребни едут по кругу. */
 
-  const steps = (len) => Math.max(1, Math.round(len / WAVE));
+const NAMAZ_WAVE_BULGE = 4;   // насколько волна выступает наружу
+const NAMAZ_WAVE_LEN = 18;    // длина одной волны, px
+const NAMAZ_WAVE_STEP = 3;    // шаг сэмплирования (меньше — плавнее морф)
 
-  /* сторона прямоугольника: последовательность «шапочек» через Q-кривые */
-  const side = (ax, ay, bx, by, nx, ny) => {
-    const n = steps(Math.hypot(bx - ax, by - ay));
-    const dx = (bx - ax) / n;
-    const dy = (by - ay) / n;
-    let out = "";
-    for (let i = 0; i < n; i++) {
-      const sx = ax + dx * i;
-      const sy = ay + dy * i;
-      const ex = ax + dx * (i + 1);
-      const ey = ay + dy * (i + 1);
-      const cx = (sx + ex) / 2 + nx * BULGE * 2;
-      const cy = (sy + ey) / 2 + ny * BULGE * 2;
-      out += ` Q ${cx.toFixed(1)} ${cy.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`;
-    }
-    return out;
+/* Один периметр с фазой phase (0..1). Возвращает строку path. */
+function namazWavePath(w, h, phase) {
+  const pad = NAMAZ_WAVE_BULGE + 1;
+  const x0 = pad;
+  const y0 = pad;
+  const x1 = w - pad;
+  const y1 = h - pad;
+
+  const pts = [];
+  const push = (x, y, nx, ny, offset) => {
+    const wave = NAMAZ_WAVE_BULGE * (0.5 + 0.5 * Math.sin(offset));
+    pts.push([x + nx * wave, y + ny * wave]);
   };
 
-  let d = `M ${x0.toFixed(1)} ${y0.toFixed(1)}`;
-  d += side(x0, y0, x1, y0, 0, -1);   // верх
-  d += side(x1, y0, x1, y1, 1, 0);    // правый бок
-  d += side(x1, y1, x0, y1, 0, 1);    // низ
-  d += side(x0, y1, x0, y0, -1, 0);   // левый бок
+  /* верх: слева → направо, волна наружу (ny = -1) */
+  const topLen = x1 - x0;
+  const topN = Math.max(2, Math.round(topLen / NAMAZ_WAVE_STEP));
+  for (let i = 0; i < topN; i++) {
+    const t = i / topN;
+    const along = t * topLen;
+    push(x0 + along, y0, 0, -1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* правый бок: сверху вниз */
+  const sideLen = y1 - y0;
+  const sideN = Math.max(2, Math.round(sideLen / NAMAZ_WAVE_STEP));
+  for (let i = 0; i < sideN; i++) {
+    const t = i / sideN;
+    const along = t * sideLen;
+    push(x1, y0 + along, 1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* низ: справа налево */
+  for (let i = 0; i < topN; i++) {
+    const t = i / topN;
+    const along = t * topLen;
+    push(x1 - along, y1, 0, 1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* левый бок: снизу вверх */
+  for (let i = 0; i < sideN; i++) {
+    const t = i / sideN;
+    const along = t * sideLen;
+    push(x0, y1 - along, -1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
+  }
   return d + " Z";
+}
+
+/* Кадры анимации: волны едут по кругу, 8 фаз на цикл. */
+function namazWaveFrames(w, h) {
+  const total = 8;
+  const frames = [];
+  for (let i = 0; i < total; i++) frames.push(namazWavePath(w, h, i / total));
+  return frames;
 }
 
 /* Расписание дня вместе с намазами. */
@@ -1703,7 +1730,7 @@ function renderTimeline() {
         const h = Math.round(box.height) || 54;
         const holder = step.querySelector(".tl-namaz-edge");
         if (!holder || w < 40) return;
-        const d = namazWavePath(w, h);
+        const frames = namazWaveFrames(w, h);
         holder.innerHTML = `
           <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
             <defs>
@@ -1713,8 +1740,10 @@ function renderTimeline() {
                 <stop offset="1" stop-color="#ffb04d"/>
               </linearGradient>
             </defs>
-            <path class="edge-track" d="${d}" pathLength="1000"/>
-            <path class="edge-core" d="${d}" pathLength="1000"/>
+            <path class="edge-core" d="${frames[0]}" pathLength="1000">
+              <animate attributeName="d" dur="4.2s" repeatCount="indefinite"
+                       calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
+            </path>
           </svg>`;
       });
 

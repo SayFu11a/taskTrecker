@@ -1666,23 +1666,7 @@ input::placeholder { color: #626880; }
   stroke-linejoin: round;
   stroke-linecap: round;
   filter: drop-shadow(0 0 5px rgba(255, 196, 92, 0.8));
-  /* свет бежит по кругу: короткий яркий штрих + длинный тусклый */
-  stroke-dasharray: 90 910;
-  animation: edge-run 3.6s linear infinite;
-}
-
-/* второй, еле заметный слой — чтобы по контуру всё время шёл свет */
-.tl-namaz-edge .edge-track {
-  fill: none;
-  stroke: rgba(255, 214, 140, 0.35);
-  stroke-width: 1.6;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-
-@keyframes edge-run {
-  from { stroke-dashoffset: 1000; }
-  to { stroke-dashoffset: 0; }
+  /* волны сами едут по кругу (SVG-анимация по d), подсветка-дэш не нужна */
 }
 .tl-namaz:hover .tl-namaz-edge,
 .tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
