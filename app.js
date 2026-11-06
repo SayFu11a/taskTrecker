@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v11";
+const BUILD_LABEL = "сборка v12";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -831,6 +831,19 @@ function renderNamaz() {
     root.appendChild(skip);
   }
 
+  /* ночная часть: подъём на фаджр → намаз → сон до 09:00 */
+  if (dateKey === nowKey && namazEnabled()) {
+    const p = nightPlan(nowKey);
+    const taken = Boolean(marks.fajr);
+    const block = el("div", "night-plan" + (taken ? " is-done" : ""));
+    block.innerHTML = `
+      <div class="night-row"><span class="night-time">${p.wakeTime}</span><span>⏰ Подъём на фаджр <small>за ${NAMAZ_WAKE_AHEAD} мин (считается от восхода/фаджра каждый день)</small></span></div>
+      <div class="night-row${taken ? " done" : ""}"><span class="night-time">${p.fajrTime}</span><span>🕌 Фаджр ${taken ? "— отмечен ✓" : `— до восхода ${p.sunriseTime}`}</span></div>
+      <div class="night-row"><span class="night-time">${p.sleepToTime}</span><span>☀️ Подъём — дальше расписание как обычно (тренировка, Ulbi, всё по плану)</span></div>
+      <div class="night-note">${p.sleepMin > 0 ? `После намаза — сон до ${p.sleepToTime}: ${fmtMinutes(p.sleepMin)}.` : "Летом фаджр почти перед восходом — поспи до 09:00, если нужно."}</div>`;
+    root.appendChild(block);
+  }
+
   const list = el("div", "prayer-list");
   day.forEach((p) => {
     const isDone = Boolean(marks[p.id]);
@@ -1057,37 +1070,55 @@ function minutesOf(hhmm) {
   return h * 60 + m;
 }
 
-/* Сдвиг расписания под намаз: день начинается с фаджра, а не с 09:00.
-   Всё, что было до начала (подъём, тренировка), сдвигается на подъём = фаджр. */
-function scheduleShift(dateKey) {
-  if (typeof namazEnabled !== "function" || !namazEnabled()) return 0;
-  const t = namazTimes(dateKey);
-  const fajr = namazMinutes(t.fajr);
-  const baseStart = 9 * 60; // расписание в data.js начинается в 09:00
-  /* если фаджр позже 09:00 (зимой он раньше), не двигаем в прошлое */
-  const shift = fajr - baseStart;
-  return Math.max(-180, Math.min(180, shift));
-}
-
-function shiftTime(hhmm, deltaMin) {
-  if (!deltaMin) return hhmm;
-  const total = minutesOf(hhmm) + deltaMin;
-  const t = ((total % 1440) + 1440) % 1440;
-  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
-}
-
-/* Расписание на конкретный день — с поправкой на фаджр. */
 function currentTimeline(dateKey) {
   const view = state.scheduleView === "coarse" ? "coarse" : "detail";
-  const base = SCHEDULE_VIEWS[view].timeline;
-  const key = dateKey || selectedDate;
-  const shift = scheduleShift(key);
-  if (!shift) return base;
-  return base.map((slot) => ({
-    ...slot,
-    from: shiftTime(slot.from, shift),
-    to: shiftTime(slot.to, shift),
-  }));
+  return SCHEDULE_VIEWS[view].timeline;
+}
+
+/* ─────────── ночь и утро под намаз ───────────
+   День остаётся прежним: подъём в 09:00, всё расписание как было.
+   Намаз встроен в ночь — подъём за 10 минут до фаджра, намаз до восхода,
+   потом сон до 09:00. Времена считаются от даты, поэтому плавают вместе
+   с солнцем (в июне фаджр в 02:30, в декабре — в 06:03). */
+
+/* сколько минут до фаджра встаём */
+const NAMAZ_WAKE_AHEAD = 10;
+
+/* Ночная часть дня для даты YYYY-MM-DD: подъём, фаджр, сон до 09:00. */
+function nightPlan(dateKey) {
+  const t = namazTimes(dateKey);
+  const fajr = namazMinutes(t.fajr);
+  const sunrise = t.sunrise ? namazMinutes(t.sunrise) : fajr + 60;
+  const wake = Math.max(0, fajr - NAMAZ_WAKE_AHEAD);
+  const dayStart = 9 * 60;
+
+  return {
+    fajr,
+    sunrise,
+    wake,
+    wakeTime: namazHHMM(wake),
+    fajrTime: t.fajr,
+    sunriseTime: t.sunrise || namazHHMM(sunrise),
+    sleepTo: dayStart,
+    sleepToTime: "09:00",
+    /* сколько минут на сон после намаза (может быть 0 летом) */
+    sleepMin: Math.max(0, dayStart - sunrise),
+    enabled: typeof namazEnabled === "function" && namazEnabled(),
+  };
+}
+
+/* Что происходит сейчас в ночной части дня: null, если день уже начался. */
+function nightNow(date) {
+  if (typeof namazEnabled !== "function" || !namazEnabled()) return null;
+  const dateKey = keyOf(date);
+  const mins = date.getHours() * 60 + date.getMinutes();
+  if (mins >= 9 * 60) return null;
+
+  const plan = nightPlan(dateKey);
+  if (mins < plan.wake) return { phase: "sleep", plan };
+  if (mins < plan.fajr) return { phase: "wake", plan };
+  if (mins < plan.sunrise) return { phase: "fajr", plan };
+  return { phase: "after", plan };
 }
 
 /* Какой сейчас интервал. Возвращает {slot, index, left, next} или null вне расписания. */
@@ -1168,7 +1199,77 @@ function renderNow() {
     return;
   }
 
+  /* Ночь: сначала смотрим утренний намаз, и только потом «вне расписания» */
+  const night = isToday ? nightNow(now) : null;
+  if (night && night.phase === "wake") {
+    const p = night.plan;
+    root.className = "now-card now-namaz-card";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">⏰</div>
+        <div class="now-text">
+          <div class="now-title">Подъём на фаджр</div>
+          <div class="now-sub">Умыться и встать на намаз в ${p.fajrTime} · через ${fmtMinutes(p.fajr - (now.getHours() * 60 + now.getMinutes()))}</div>
+        </div>
+      </div>
+      <div class="now-foot">
+        <span class="now-next">После намаза — сон до ${p.sleepToTime}</span>
+        <span class="now-workout">Восход ${p.sunriseTime} · фаджр закрывается восходом</span>
+      </div>`;
+    return;
+  }
+
+  if (night && night.phase === "fajr") {
+    const p = night.plan;
+    const left = p.sunrise - (now.getHours() * 60 + now.getMinutes());
+    root.className = "now-card now-namaz-card";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">🕌</div>
+        <div class="now-text">
+          <div class="now-title">Фаджр</div>
+          <div class="now-sub">До восхода ${p.sunriseTime} · осталось ${fmtMinutes(left)}</div>
+        </div>
+      </div>
+      <div class="now-foot">
+        <span class="now-next">После намаза — досыпаем до ${p.sleepToTime}</span>
+        <span class="now-workout">${wt.title} · ${wt.tag}</span>
+      </div>`;
+    return;
+  }
+
+  if (night && night.phase === "after") {
+    const p = night.plan;
+    root.className = "now-card now-off";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">😴</div>
+        <div class="now-text">
+          <div class="now-title">Сон после фаджра</div>
+          <div class="now-sub">До ${p.sleepToTime} · ещё ${fmtMinutes(p.sleepTo - (now.getHours() * 60 + now.getMinutes()))}. Намаз уже сделан — это не лень, это часть плана.</div>
+        </div>
+      </div>
+      <div class="now-foot">
+        <span class="now-workout">${wt.title} · ${wt.tag}</span>
+        <span class="now-note">Расписание начнётся в 09:00</span>
+      </div>`;
+    return;
+  }
+
   if (!info) {
+    const p = isToday ? nightPlan(nowKey) : null;
     root.className = "now-card now-off";
     root.innerHTML = `
       <div class="now-head">
@@ -1178,8 +1279,12 @@ function renderNow() {
       <div class="now-main">
         <div class="now-icon">🌙</div>
         <div class="now-text">
-          <div class="now-title">Вне расписания</div>
-          <div class="now-sub">Расписание идёт с 09:00 до 23:00. Отдых — тоже часть плана.</div>
+          <div class="now-title">${p ? "Сон до утреннего намаза" : "Вне расписания"}</div>
+          <div class="now-sub">${
+            p
+              ? `Расписание идёт с 09:00 до 23:00. Подъём на фаджр в ${p.wakeTime}, намаз в ${p.fajrTime}.`
+              : "Расписание идёт с 09:00 до 23:00. Отдых — тоже часть плана."
+          }</div>
         </div>
       </div>
       <div class="now-foot">
@@ -1695,6 +1800,27 @@ function namazTick() {
   const nowKey = keyOf(now);
   if (namazSkipToday()) return;
   const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  /* подъём на фаджр: за 10 минут до него и в сам момент */
+  const night = nightNow(now);
+  if (night) {
+    const p = night.plan;
+    [[p.wake, `Подъём на фаджр — намаз в ${p.fajrTime}.`], [p.fajr, `Время фаджра — ${p.fajrTime}. До восхода ${p.sunriseTime}.`]].forEach(([at, text]) => {
+      const key = `wake:${nowKey}:${at}`;
+      if (nowMin !== at || namazNotified.has(key)) return;
+      namazNotified.add(key);
+      toast(text);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+        try {
+          new Notification("🕌 Фаджр", { body: text, icon: "./icon-192.png", tag: "namaz-wake" });
+        } catch {
+          /* молча */
+        }
+      }
+      if (typeof play === "function") play("tick");
+    });
+    return;
+  }
 
   namazDay(nowKey).forEach((p) => {
     [20, 0].forEach((ahead) => {
