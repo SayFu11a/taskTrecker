@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v23";
+const BUILD_LABEL = "сборка v24";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1725,9 +1725,10 @@ function renderTimeline() {
       step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
       /* сам край блока становится волнистым: строим контур по его размеру */
       requestAnimationFrame(() => {
-        const box = step.getBoundingClientRect();
-        const w = Math.round(box.width) || 320;
-        const h = Math.round(box.height) || 54;
+        /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
+           не пересчитывал рамку */
+        const w = step.offsetWidth || 320;
+        const h = step.offsetHeight || 54;
         const holder = step.querySelector(".tl-namaz-edge");
         if (!holder || w < 40) return;
         const frames = namazWaveFrames(w, h);

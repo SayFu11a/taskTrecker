@@ -1663,24 +1663,24 @@ input::placeholder { color: #626880; }
 .tl-namaz-edge .edge-flame {
   fill: none;
   stroke: url(#namazEdgeGrad);
-  stroke-width: 9;
+  stroke-width: 15;
   stroke-linejoin: round;
   stroke-linecap: round;
-  opacity: 0.42;
-  filter: blur(3.5px);
+  opacity: 0.5;
+  filter: blur(5px);
   animation: edge-flame-flicker 1.7s ease-in-out infinite;
 }
 @keyframes edge-flame-flicker {
-  0%, 100% { opacity: 0.34; stroke-width: 8; }
-  35% { opacity: 0.52; stroke-width: 10; }
-  68% { opacity: 0.4; stroke-width: 8.5; }
+  0%, 100% { opacity: 0.42; stroke-width: 13; }
+  35% { opacity: 0.62; stroke-width: 17; }
+  68% { opacity: 0.48; stroke-width: 14; }
 }
 
 /* сама волна: чуть толще и горячее */
 .tl-namaz-edge .edge-core {
   fill: none;
   stroke: url(#namazEdgeGrad);
-  stroke-width: 3;
+  stroke-width: 4.2;
   stroke-linejoin: round;
   stroke-linecap: round;
   filter: drop-shadow(0 0 5px rgba(255, 196, 92, 0.9))
@@ -1758,7 +1758,9 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover,
 .tl-namaz.is-lit {
   border-color: transparent;
-  transform: translateY(-1px) scale(1.015);
+  /* соседние блоки не двигаются: увеличивается только сам блок,
+     выезжая над ними по z-index */
+  transform: translateY(-2px) scale(1.06);
   animation: none;
   box-shadow:
     0 0 60px rgba(255, 205, 110, 0.7),
@@ -1778,23 +1780,31 @@ input::placeholder { color: #626880; }
   font-size: 13px; font-weight: 600; color: #ffdc9e; letter-spacing: 0.2px;
   transition: font-size 0.18s ease, color 0.18s ease;
 }
-/* при наведении текст крупнее и контрастнее, чтобы читался поверх света */
+/* при наведении текст крупнее и контрастнее.
+   Масштабируем transform'ом, а не размером шрифта: размеры элемента не меняются,
+   поэтому соседние строки не сдвигаются. */
+.tl-namaz:hover .tl-namaz-inner,
+.tl-namaz.is-lit .tl-namaz-inner {
+  transform: scale(1.06);
+  transform-origin: left center;
+  transition: transform 0.2s ease;
+}
+.tl-namaz-inner { transition: transform 0.2s ease; }
 .tl-namaz:hover .tl-namaz-title,
 .tl-namaz.is-lit .tl-namaz-title {
-  font-size: 14.5px;
   color: #fff4dc;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 .tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 232, 190, 0.8); transition: font-size 0.18s ease; }
 .tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; transition: font-size 0.18s ease; }
 .tl-namaz:hover .tl-namaz-times,
-.tl-namaz.is-lit .tl-namaz-times { font-size: 12px; color: rgba(255, 240, 210, 0.95); }
+.tl-namaz.is-lit .tl-namaz-times { color: rgba(255, 244, 216, 1); }
 .tl-namaz:hover .tl-namaz-times b,
-.tl-namaz.is-lit .tl-namaz-times b { font-size: 14px; color: #ffe4ae; }
+.tl-namaz.is-lit .tl-namaz-times b { color: #ffe9bd; }
 .tl-namaz:hover .tl-namaz-times small,
-.tl-namaz.is-lit .tl-namaz-times small { color: rgba(255, 236, 200, 0.9); }
+.tl-namaz.is-lit .tl-namaz-times small { color: rgba(255, 240, 210, 0.95); }
 .tl-namaz:hover .tl-namaz-scale,
-.tl-namaz.is-lit .tl-namaz-scale { font-size: 11.5px; color: rgba(255, 238, 205, 0.95); }
+.tl-namaz.is-lit .tl-namaz-scale { color: rgba(255, 242, 214, 1); }
 .tl-namaz-times small { color: rgba(255, 226, 178, 0.62); }
 
 .tl-namaz-scale {
