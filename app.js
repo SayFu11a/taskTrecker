@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v17";
+const BUILD_LABEL = "сборка v18";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1713,7 +1713,8 @@ function renderTimeline() {
                 <stop offset="1" stop-color="#ffb04d"/>
               </linearGradient>
             </defs>
-            <path class="edge-core" d="${d}"/>
+            <path class="edge-track" d="${d}" pathLength="1000"/>
+            <path class="edge-core" d="${d}" pathLength="1000"/>
           </svg>`;
       });
 
