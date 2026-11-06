@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v27";
+const BUILD_LABEL = "сборка v28";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1706,24 +1706,41 @@ function renderTimeline() {
       step.addEventListener("pointermove", (e) => {
         moveLight(e);
         movePageLight(e);
+        lensMove(e.clientX, e.clientY);
       });
       step.addEventListener("mouseenter", (e) => {
         step.classList.add("is-lit");
         moveLight(e);
         glowOn(e.clientX, e.clientY);
+        lensMount(step);
+        lensMove(e.clientX, e.clientY);
       });
       step.addEventListener("mouseleave", () => {
         step.classList.remove("is-lit");
         step.style.removeProperty("--mx");
         step.style.removeProperty("--my");
         glowOff();
+        lensUnmount();
       });
       step.addEventListener("focus", () => glowOn());
-      step.addEventListener("blur", () => glowOff());
+      step.addEventListener("blur", () => {
+        glowOff();
+        lensUnmount();
+      });
+      /* при прокрутке позиция блока меняется — пересчитываем опору лупы */
+      window.addEventListener("scroll", () => {
+        if (step.classList.contains("is-lit")) {
+          const r = step.getBoundingClientRect();
+          lensSrcRect.left = r.left + (r.width - lensSrcRect.width) / 2;
+          lensSrcRect.top = r.top + (r.height - lensSrcRect.height) / 2;
+          lensMove(lensPoint.x, lensPoint.y);
+        }
+      }, { passive: true });
       /* сам край блока становится волнистым: строим контур по его размеру */
       requestAnimationFrame(() => {
-        /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
-           не пересчитывал рамку */
+        /* волнистый край в оригинале не строим: рамку рисует лупа (копия блока),
+           иначе край двоился бы — «два бордера». Оригинал работает как опора.
+           offsetWidth/Height — размеры без transform. */
         const w = step.offsetWidth || 320;
         const h = step.offsetHeight || 54;
         const holder = step.querySelector(".tl-namaz-edge");
@@ -2185,6 +2202,86 @@ var glowLayer = null;
 var glowPosNodes = [];
 var glowPoint = { x: 0, y: 0 };
 var glowRaf = 0;
+
+/* ─────────── лупа вокруг курсора ───────────
+   Клон блока намаза кладём в круглый слой и двигаем ТОЛЬКО transform'ами:
+   ничего не читаем из-под слоя (никакого backdrop-filter), не трогаем layout.
+   1) следим за курсором: фиксированный контейнер + translate3d;
+   2) внутри круга компенсируем смещение и увеличиваем -> точка под курсором
+      остаётся увеличенной ровно под ним;
+   3) небольшой rotateY по краю круга даёт эффект рыбьего глаза. */
+var lensBox = null;
+var lensFollow = null;
+var lensInner = null;
+var lensSrcRect = null;
+var lensPoint = { x: 0, y: 0 };
+var lensRaf = 0;
+var LENS_ZOOM = 1.7;
+var LENS_SIZE = 300;
+
+function lensNodes() {
+  if (lensBox) return lensBox;
+  lensBox = document.getElementById("namazLens");
+  if (!lensBox) return null;
+  lensFollow = lensBox.querySelector(".lens-follow");
+  lensInner = document.getElementById("namazLensInner");
+  return lensBox;
+}
+
+function lensMount(step) {
+  if (!lensNodes() || !lensInner) return;
+  /* блок при наведении чуть приподнят и увеличен — берём его настоящую
+     рамку без transform, иначе смещения в лупе не совпадут */
+  const r0 = step.getBoundingClientRect();
+  const bw = step.offsetWidth || r0.width;
+  const bh = step.offsetHeight || r0.height;
+  lensSrcRect = {
+    left: r0.left + (r0.width - bw) / 2,
+    top: r0.top + (r0.height - bh) / 2,
+    width: bw,
+    height: bh,
+  };
+  /* клон без анимации волн: они гоняются в оригинале, копия — статичная картинка */
+  const clone = step.cloneNode(true);
+  clone.removeAttribute("id");
+  clone.removeAttribute("role");
+  clone.removeAttribute("tabindex");
+  clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+  clone.removeAttribute("class");
+  clone.className = "tl-namaz is-lit tl-namaz-clone";
+  lensInner.innerHTML = "";
+  lensInner.appendChild(clone);
+
+  lensInner.style.width = `${lensSrcRect.width}px`;
+  lensInner.style.height = `${lensSrcRect.height}px`;
+  lensBox.classList.add("on");
+}
+
+function lensUnmount() {
+  if (!lensBox) return;
+  lensBox.classList.remove("on");
+}
+
+function lensMove(x, y) {
+  lensPoint.x = x;
+  lensPoint.y = y;
+  if (lensRaf) return;
+  lensRaf = requestAnimationFrame(() => {
+    lensRaf = 0;
+    if (!lensFollow || !lensSrcRect) return;
+    const zoom = LENS_ZOOM;
+    lensFollow.style.setProperty("--lens-x", `${lensPoint.x}px`);
+    lensFollow.style.setProperty("--lens-y", `${lensPoint.y}px`);
+    /* где курсор внутри блока — в координатах блока */
+    const lx = lensPoint.x - lensSrcRect.left;
+    const ly = lensPoint.y - lensSrcRect.top;
+    lensInner.style.setProperty("--lx", `${lx}px`);
+    lensInner.style.setProperty("--ly", `${ly}px`);
+    /* смещение к центру круга: точка под курсором должна оказаться в центре */
+    lensInner.style.transform =
+      `translate3d(${LENS_SIZE / 2 - lx * zoom}px, ${LENS_SIZE / 2 - ly * zoom}px, 0) scale(${zoom})`;
+  });
+}
 
 function glowInit() {
   glowLayer = document.getElementById("namazGlow");
