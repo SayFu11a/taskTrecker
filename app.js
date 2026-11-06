@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v13";
+const BUILD_LABEL = "сборка v14";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -738,13 +738,19 @@ function toggleNamaz(dateKey, id) {
   const day = state.namaz[dateKey] || (state.namaz[dateKey] = {});
   if (day[id]) delete day[id];
   else day[id] = true;
+  const marked = Boolean(day[id]);
   if (!Object.keys(day).length) delete state.namaz[dateKey];
   touchDay(dateKey);
   save();
+  /* перерисовываем всё, где виден намаз: карточку, «Сейчас», расписание и счётчик.
+     Раньше расписание не обновлялось — поэтому галочка появлялась только после
+     перезагрузки, а повторный клик «не снимал» отметку. */
   renderNamaz();
   renderNow();
-  play(day[id] ? "markGood" : "tick");
-  if (day[id]) toast(`${NAMAZ_NAMES[id]} отмечен.`);
+  renderTimeline();
+  renderHero();
+  play(marked ? "markGood" : "tick");
+  if (marked) toast(`${NAMAZ_NAMES[id]} отмечен.`);
 }
 
 function namazSourceText(times, dateKey) {
@@ -1618,9 +1624,35 @@ function renderTimeline() {
         ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
 
       step.addEventListener("click", () => toggleNamaz(selectedDate, row.id));
-      /* свет по всей странице, пока курсор на намазе */
-      step.addEventListener("mouseenter", () => document.body.classList.add("namaz-light"));
-      step.addEventListener("mouseleave", () => document.body.classList.remove("namaz-light"));
+
+      /* свет живёт там, где мышка: источник света двигается за курсором */
+      const moveLight = (e) => {
+        const box = step.getBoundingClientRect();
+        const x = ((e.clientX - box.left) / box.width) * 100;
+        const y = ((e.clientY - box.top) / box.height) * 100;
+        step.style.setProperty("--mx", `${Math.max(0, Math.min(100, x))}%`);
+        step.style.setProperty("--my", `${Math.max(0, Math.min(100, y))}%`);
+      };
+      const movePageLight = (e) => {
+        document.body.style.setProperty("--page-mx", `${(e.clientX / window.innerWidth) * 100}%`);
+        document.body.style.setProperty("--page-my", `${(e.clientY / window.innerHeight) * 100}%`);
+      };
+      step.addEventListener("pointermove", (e) => {
+        moveLight(e);
+        movePageLight(e);
+      });
+      step.addEventListener("mouseenter", (e) => {
+        document.body.classList.add("namaz-light");
+        step.classList.add("is-lit");
+        moveLight(e);
+        movePageLight(e);
+      });
+      step.addEventListener("mouseleave", () => {
+        document.body.classList.remove("namaz-light");
+        step.classList.remove("is-lit");
+        step.style.removeProperty("--mx");
+        step.style.removeProperty("--my");
+      });
       step.addEventListener("focus", () => document.body.classList.add("namaz-light"));
       step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
       if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
@@ -1648,6 +1680,15 @@ function renderTimeline() {
       ${isNow ? '<span class="tl-now">сейчас</span>' : ""}`;
     root.appendChild(line);
     prevMinutes = to;
+  });
+
+  /* касание на телефоне тоже зажигает блок от точки нажатия */
+  root.querySelectorAll(".tl-namaz").forEach((node) => {
+    node.addEventListener("pointerdown", (e) => {
+      const box = node.getBoundingClientRect();
+      node.style.setProperty("--mx", `${((e.clientX - box.left) / box.width) * 100}%`);
+      node.style.setProperty("--my", `${((e.clientY - box.top) / box.height) * 100}%`);
+    });
   });
 
   if (moment && moment.row && !moment.row.prayer && moment.row.block && !hoursFor(nowKey, moment.row.block)) {
