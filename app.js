@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v24";
+const BUILD_LABEL = "сборка v25";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1701,9 +1701,13 @@ function renderTimeline() {
         step.style.setProperty("--mx", `${Math.max(0, Math.min(100, x))}%`);
         step.style.setProperty("--my", `${Math.max(0, Math.min(100, y))}%`);
       };
+      /* свет по странице: держим и проценты (для пятна), и пиксели (для лучей —
+         лучи живут в круглом слое, где проценты считаются от его размера) */
       const movePageLight = (e) => {
         document.body.style.setProperty("--page-mx", `${(e.clientX / window.innerWidth) * 100}%`);
         document.body.style.setProperty("--page-my", `${(e.clientY / window.innerHeight) * 100}%`);
+        document.body.style.setProperty("--page-px", `${e.clientX}px`);
+        document.body.style.setProperty("--page-py", `${e.clientY}px`);
       };
       step.addEventListener("pointermove", (e) => {
         moveLight(e);
@@ -1785,6 +1789,10 @@ function renderTimeline() {
       const box = node.getBoundingClientRect();
       node.style.setProperty("--mx", `${((e.clientX - box.left) / box.width) * 100}%`);
       node.style.setProperty("--my", `${((e.clientY - box.top) / box.height) * 100}%`);
+      document.body.style.setProperty("--page-px", `${e.clientX}px`);
+      document.body.style.setProperty("--page-py", `${e.clientY}px`);
+      document.body.style.setProperty("--page-mx", `${(e.clientX / window.innerWidth) * 100}%`);
+      document.body.style.setProperty("--page-my", `${(e.clientY / window.innerHeight) * 100}%`);
     });
   });
 
