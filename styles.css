@@ -1559,3 +1559,26 @@ input::placeholder { color: #626880; }
   border: 1px solid rgba(255, 181, 107, 0.28);
 }
 .now-namaz.is-done { color: var(--accent-2); background: rgba(55, 214, 192, 0.08); border-color: rgba(55, 214, 192, 0.28); }
+
+.now-card.now-namaz-card {
+  border-color: rgba(255, 181, 107, 0.35);
+  background: linear-gradient(180deg, rgba(255, 181, 107, 0.10), rgba(255, 181, 107, 0.02));
+}
+
+/* ночная часть дня: подъём на фаджр, намаз, сон до 09:00 */
+.night-plan {
+  margin-bottom: 10px;
+  padding: 10px 11px;
+  border-radius: 11px;
+  border: 1px dashed rgba(255, 181, 107, 0.35);
+  background: rgba(255, 181, 107, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.night-row { display: flex; gap: 10px; font-size: 12px; align-items: baseline; }
+.night-row small { color: var(--muted); font-size: 10px; }
+.night-time { font-variant-numeric: tabular-nums; color: #ffb56b; font-weight: 600; min-width: 44px; }
+.night-row.done { color: var(--accent-2); }
+.night-row.done .night-time { color: var(--accent-2); }
+.night-note { font-size: 11px; color: var(--muted); }
