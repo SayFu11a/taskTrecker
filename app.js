@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v27";
+const BUILD_LABEL = "сборка v30";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1673,6 +1673,7 @@ function renderTimeline() {
       step.innerHTML = `
         <span class="tl-namaz-edge" aria-hidden="true"></span>
         <span class="tl-namaz-glow" aria-hidden="true"></span>
+        <span class="tl-namaz-core">
         <span class="tl-namaz-steps" aria-hidden="true">
           <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
         </span>
@@ -1687,6 +1688,7 @@ function renderTimeline() {
           <span>${row.prep}</span>
           <span class="mid">${row.at}</span>
           <span>${row.end}</span>
+        </span>
         </span>
         ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
         ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
@@ -1709,11 +1711,13 @@ function renderTimeline() {
       });
       step.addEventListener("mouseenter", (e) => {
         step.classList.add("is-lit");
+        document.body.classList.add("lens-on");
         moveLight(e);
         glowOn(e.clientX, e.clientY);
       });
       step.addEventListener("mouseleave", () => {
         step.classList.remove("is-lit");
+        document.body.classList.remove("lens-on");
         step.style.removeProperty("--mx");
         step.style.removeProperty("--my");
         glowOff();
