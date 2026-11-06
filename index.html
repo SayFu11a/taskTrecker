@@ -69,6 +69,8 @@
   <section class="panel active" id="panel-day">
     <div class="now-card" id="nowCard" aria-live="polite"></div>
 
+    <div class="prayer-card card" id="prayerCard"></div>
+
     <div class="mode-bar">
       <div class="mode-buttons" id="modeButtons"></div>
       <p class="mode-hint" id="modeHint"></p>
@@ -94,7 +96,7 @@
 
     <div class="section-head">
       <h2>Каркас дня</h2>
-      <p>Старт в 09:00. Это ориентир, а не жёсткие дедлайны.</p>
+      <p id="timelineNote">День начинается с фаджра: время подстраивается под намаз, а не наоборот. Ориентир, а не дедлайн.</p>
     </div>
     <div class="timeline" id="timeline"></div>
   </section>
@@ -282,6 +284,11 @@
       </div>
 
       <div class="card profile-card">
+        <div class="profile-label">Намаз</div>
+        <div id="namazBox"></div>
+      </div>
+
+      <div class="card profile-card">
         <div class="profile-label">Данные</div>
         <div class="acc-row">
           <span class="acc-dot off"></span>
@@ -302,6 +309,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="data.js"></script>
+<script src="namaz.js"></script>
 <script src="sound.js"></script>
 <script src="achievements.js"></script>
 <script src="sync.js"></script>
