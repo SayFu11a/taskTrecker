@@ -1590,54 +1590,54 @@ input::placeholder { color: #626880; }
 .night-row.done .night-time { color: var(--accent-2); }
 .night-note { font-size: 11px; color: var(--muted); }
 
-/* ─────────── намаз в расписании: плавающий огненный край ─────────── */
-/* Слои:
-   SVG-рамка (.tl-namaz-edge) — плавающий волнистый контур как на референсе,
-   перья пламени по краям (.tl-edge-flame) — огонь как на референсе,
-   контент (.tl-namaz-inner) — всегда сверху и читается. */
+/* ─────────── намаз в расписании: стиль и свет как в v15, но край живой ─────────── */
+/* --mx/--my — координаты курсора внутри блока (ставит app.js).
+   Слои снизу вверх: glow (свет за курсором) → inner (контент) →
+   волны (плавающий край) → кромка (горящий периметр). */
 
 .tl-namaz {
   --mx: 50%;
   --my: 50%;
   position: relative;
   display: block;
-  margin: 10px 4px;
-  padding: 13px 15px 13px 12px;
-  border-radius: 16px;
-  /* своей рамки нет: единственная граница — живой контур .tl-namaz-edge,
-     иначе получалось «два бордера» */
+  margin: 8px 2px;
+  padding: 11px 13px 11px 10px;
+  border-radius: 12px;
+  /* статичный прямоугольный контур убран: единственный край — плавающие волны */
   border: none;
   background:
-    linear-gradient(90deg, rgba(255, 199, 102, 0.12), rgba(255, 199, 102, 0.02) 60%),
-    rgba(22, 18, 11, 0.92);
-  color: #ffe9c4;
+    linear-gradient(90deg, rgba(255, 199, 102, 0.14), rgba(255, 199, 102, 0.03) 60%),
+    rgba(24, 20, 12, 0.62);
+  color: #ffe6b8;
   cursor: pointer;
+  overflow: visible;
   font: inherit;
   text-align: left;
   isolation: isolate;
-  box-shadow: 0 0 16px rgba(255, 183, 77, 0.14);
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease,
-    border-color 0.3s ease, background 0.3s ease;
+  box-shadow:
+    0 0 0 1px rgba(255, 199, 102, 0.10) inset,
+    0 0 18px rgba(255, 183, 77, 0.14);
+  transition: transform 0.18s ease, box-shadow 0.3s ease;
   animation: namaz-breathe 5s ease-in-out infinite;
 }
 
 @keyframes namaz-breathe {
-  0%, 100% { box-shadow: 0 0 14px rgba(255, 183, 77, 0.12); }
-  50% { box-shadow: 0 0 24px rgba(255, 183, 77, 0.22); }
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255, 199, 102, 0.10) inset, 0 0 16px rgba(255, 183, 77, 0.12); }
+  50% { box-shadow: 0 0 0 1px rgba(255, 199, 102, 0.18) inset, 0 0 28px rgba(255, 183, 77, 0.24); }
 }
 
-/* контент поверх всего */
+/* контент всегда поверх света */
 .tl-namaz-inner {
   position: relative;
-  z-index: 6;
+  z-index: 5;
   display: grid;
-  grid-template-columns: 26px 1fr auto;
+  grid-template-columns: 24px 1fr auto;
   align-items: center;
   gap: 10px;
   pointer-events: none;
 }
 
-/* свет внутри блока, ходит за мышкой (мягкий, текст не заливает) */
+/* свет внутри блока, ходит за мышкой — как в v15 */
 .tl-namaz-glow {
   position: absolute;
   inset: 0;
@@ -1646,20 +1646,74 @@ input::placeholder { color: #626880; }
   border-radius: inherit;
   opacity: 0;
   background: radial-gradient(
-    240px circle at var(--mx) var(--my),
-    rgba(255, 214, 150, 0.16),
-    rgba(255, 190, 100, 0.07) 45%,
-    transparent 72%
+    340px circle at var(--mx) var(--my),
+    rgba(255, 226, 168, 0.55),
+    rgba(255, 192, 92, 0.26) 38%,
+    rgba(255, 170, 55, 0.09) 62%,
+    transparent 78%
   );
-  transition: opacity 0.3s ease;
+  transition: opacity 0.28s ease;
 }
 .tl-namaz:hover .tl-namaz-glow,
 .tl-namaz.is-lit .tl-namaz-glow { opacity: 1; }
 
-/* ── плавающий волнистый контур (SVG-рамка) ── */
+/* кромка: горящий периметр от курсора — как в v15 */
+.tl-namaz::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.5px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  background: radial-gradient(
+    200px circle at var(--mx) var(--my),
+    #fff3d0,
+    #ffcf7a 25%,
+    rgba(255, 170, 60, 0.35) 55%,
+    transparent 75%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 6px rgba(255, 196, 92, 0.9));
+}
+.tl-namaz:hover::before,
+.tl-namaz.is-lit::before { opacity: 1; }
+
+/* внутренний жар + общий свет — как в v15 */
+.tl-namaz::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  box-shadow:
+    inset 0 0 30px rgba(255, 200, 110, 0.4),
+    inset 0 0 80px rgba(255, 165, 45, 0.2);
+  background: radial-gradient(
+    320px circle at var(--mx) var(--my),
+    rgba(255, 226, 170, 0.10),
+    transparent 65%
+  );
+}
+.tl-namaz:hover::after,
+.tl-namaz.is-lit::after { opacity: 1; }
+
+/* ── плавающие волны вокруг блока ── */
 .tl-namaz-edge {
   position: absolute;
-  inset: -4px;
+  inset: -6px;
   z-index: 4;
   pointer-events: none;
   opacity: 0;
@@ -1668,92 +1722,52 @@ input::placeholder { color: #626880; }
 }
 .tl-namaz:hover .tl-namaz-edge,
 .tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
-
 .tl-namaz-edge svg { width: 100%; height: 100%; display: block; overflow: visible; }
 
+/* мягкое свечение волны — часть самой линии, не вторая рамка */
 .tl-namaz-edge .edge-glow {
   fill: none;
   stroke: url(#namazEdgeGrad);
-  stroke-width: 10;
+  stroke-width: 9;
   stroke-linejoin: round;
-  opacity: 0.28;
-  filter: blur(7px);
+  opacity: 0.22;
+  filter: blur(6px);
 }
+/* сама волна */
 .tl-namaz-edge .edge-core {
   fill: none;
   stroke: url(#namazEdgeGrad);
-  stroke-width: 2.6;
+  stroke-width: 2.2;
   stroke-linejoin: round;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 4px rgba(255, 196, 92, 0.85));
+  filter: drop-shadow(0 0 5px rgba(255, 196, 92, 0.85));
 }
 
-/* «дыхание» и дрожание контура */
 .tl-namaz:hover .tl-namaz-edge .edge-core,
 .tl-namaz.is-lit .tl-namaz-edge .edge-core {
-  animation: edge-flicker 2.4s ease-in-out infinite;
+  animation: edge-flicker 2.6s ease-in-out infinite;
 }
 
 @keyframes edge-flicker {
-  0%, 100% { stroke-width: 2.6; opacity: 1; }
-  40% { stroke-width: 3; opacity: 0.92; }
-  70% { stroke-width: 2.4; opacity: 1; }
+  0%, 100% { stroke-width: 2.2; opacity: 0.95; }
+  45% { stroke-width: 2.5; opacity: 1; }
+  72% { stroke-width: 2.1; opacity: 0.9; }
 }
 
-/* ── перья пламени по краям ── */
-.tl-edge-flame {
-  position: absolute;
-  pointer-events: none;
-  z-index: 3;
-  opacity: 0;
-  transition: opacity 0.4s ease;
-  filter: blur(1.5px);
-  background-repeat: repeat-x;
-}
-.tl-namaz:hover .tl-edge-flame,
-.tl-namaz.is-lit .tl-edge-flame { opacity: 0.95; }
-
-.tl-edge-flame.top,
-.tl-edge-flame.bottom {
-  left: -6px;
-  right: -6px;
-  height: 16px;
-}
-.tl-edge-flame.top { top: -12px; }
-.tl-edge-flame.bottom { bottom: -12px; transform: scaleY(-1); }
-
-.tl-edge-flame.left,
-.tl-edge-flame.right {
-  top: -4px;
-  bottom: -4px;
-  width: 12px;
-  background-repeat: repeat-y;
-  filter: blur(1.8px);
-}
-.tl-edge-flame.left { left: -9px; }
-.tl-edge-flame.right { right: -9px; transform: scaleX(-1); }
-
-@keyframes flame-run {
-  from { background-position: 0 0; }
-  to { background-position: 64px 0; }
-}
-
-/* наведение: блок подрастает, фон плотнее — текст ярче света */
+/* наведение: как v15 — блок подаётся чуть вверх и разгорается */
 .tl-namaz:hover,
 .tl-namaz.is-lit {
-  transform: scale(1.03);
+  transform: translateY(-1px);
   z-index: 6;
   animation: none;
-  background:
-    linear-gradient(90deg, rgba(58, 41, 14, 0.97), rgba(30, 23, 13, 0.97)),
-    rgba(22, 18, 11, 0.96);
   box-shadow:
-    0 0 0 1px rgba(255, 226, 170, 0.28) inset,
-    0 0 34px rgba(255, 196, 96, 0.42),
-    0 0 90px rgba(255, 170, 60, 0.22);
+    0 0 0 1px rgba(255, 236, 190, 0.35) inset,
+    0 0 60px rgba(255, 205, 110, 0.7),
+    0 0 150px rgba(255, 180, 70, 0.42),
+    0 0 260px rgba(255, 170, 60, 0.18);
 }
 
-/* три ступеньки */
+/* три ступеньки: подготовка → намаз → конец */
 .tl-namaz-steps { position: relative; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
 .tl-namaz-steps .step { display: block; height: 3px; border-radius: 2px; background: linear-gradient(90deg, #ffd68a, #ffb84d); }
 .tl-namaz-steps .step-1 { width: 8px; opacity: 0.5; }
@@ -1762,38 +1776,34 @@ input::placeholder { color: #626880; }
 
 .tl-namaz-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tl-namaz-title {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: #fff2d6;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffdc9e;
   letter-spacing: 0.2px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 10px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
-.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: #f2dcb4; }
-.tl-namaz-times b {
-  font-size: 13px; color: #ffe0a3; font-variant-numeric: tabular-nums;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
-}
-.tl-namaz-times small { color: rgba(255, 226, 178, 0.8); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 232, 190, 0.85); }
+.tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; }
+.tl-namaz-times small { color: rgba(255, 232, 190, 0.75); }
 
 .tl-namaz-scale {
   display: flex; align-items: center; gap: 6px;
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
-  color: rgba(255, 226, 178, 0.8);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  color: rgba(255, 232, 190, 0.7);
 }
-.tl-namaz-scale .mid { color: #ffe0a3; font-weight: 600; }
-.tl-namaz-scale span + span::before { content: "→"; margin-right: 6px; color: rgba(255, 226, 178, 0.4); }
+.tl-namaz-scale .mid { color: #ffd68a; font-weight: 600; }
+.tl-namaz-scale span + span::before { content: "→"; margin-right: 6px; color: rgba(255, 226, 178, 0.35); }
 
-.tl-namaz.is-now { box-shadow: 0 0 26px rgba(255, 196, 92, 0.4); }
-.tl-namaz.is-done { box-shadow: 0 0 22px rgba(120, 230, 200, 0.28); }
+.tl-namaz.is-now { box-shadow: 0 0 26px rgba(255, 196, 92, 0.45); }
+.tl-namaz.is-done { box-shadow: 0 0 22px rgba(120, 230, 200, 0.3); }
 .tl-namaz.is-done .tl-namaz-title { color: #a9f0dc; }
-.tl-namaz.is-past { opacity: 0.55; }
+.tl-namaz.is-past { opacity: 0.6; }
 .tl-namaz-now {
-  position: absolute; right: 10px; bottom: 8px;
+  position: absolute; right: 12px; bottom: 8px;
   font-size: 10px; color: #ffd68a; text-transform: lowercase; z-index: 7;
 }
-.tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 7; color: #a9f0dc; font-weight: 700; }
+.tl-namaz-check { position: absolute; right: 14px; top: 8px; z-index: 7; color: #a9f0dc; font-weight: 700; }
 
 /* кусок обычного блока после намаза */
 .tl-row.is-cont { opacity: 0.92; background: rgba(255, 255, 255, 0.02); }

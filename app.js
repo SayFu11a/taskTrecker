@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v18";
+const BUILD_LABEL = "сборка v19";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1753,8 +1753,9 @@ function renderTimeline() {
       /* волнистая рамка: строим после вставки в DOM, когда известны размеры */
       const buildEdge = () => {
         const box = step.getBoundingClientRect();
-        const w = Math.round(box.width) || 320;
-        const h = Math.round(box.height) || 56;
+        /* рамка живёт в контейнере с inset: -6px, поэтому добавляем запас */
+        const w = Math.round(box.width) + 12 || 332;
+        const h = Math.round(box.height) + 12 || 68;
         const seed = (row.id || "p").length + h;
         const radius = parseFloat(getComputedStyle(step).borderRadius) || 16;
         const d = namazWavePath(w, h, seed, radius);
