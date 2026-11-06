@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v20";
+const BUILD_LABEL = "сборка v15";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1146,82 +1146,6 @@ function cutInterval(piece, ev) {
   return out;
 }
 
-/* ─────────── рамка намаза: плавающий волнистый контур ───────────
-   Строим плавную замкнутую кривую по периметру блока (Catmull-Rom → Безье),
-   точки выходят за границы на пару пикселей — контур «плывёт», как на референсе. */
-function namazWavePath(w, h, seed, radius) {
-  const rnd = (i) => {
-    /* детерминированный «шум»: рамка не дёргается при каждом рендере */
-    const x = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
-    return x - Math.floor(x);
-  };
-  const r = Math.min(radius || 16, w / 3, h / 3);
-  const inset = 1.5;
-  const x0 = inset;
-  const y0 = inset;
-  const x1 = w - inset;
-  const y1 = h - inset;
-  const wob = (i) => (rnd(i) - 0.5) * 3; // лёгкое «желе»
-
-  const pts = [];
-  /* верх — по прямой между скруглениями */
-  const nx = Math.max(3, Math.round((w - r * 2) / 52));
-  for (let i = 0; i <= nx; i++) {
-    const x = x0 + r + ((x1 - x0 - r * 2) * i) / nx;
-    pts.push({ x, y: y0 + wob(i) });
-  }
-  /* правый бок */
-  const ny = Math.max(1, Math.round((h - r * 2) / 24));
-  for (let i = 1; i <= ny; i++) {
-    const y = y0 + r + ((y1 - y0 - r * 2) * i) / (ny + 1);
-    pts.push({ x: x1 + wob(10 + i), y });
-  }
-  /* низ */
-  for (let i = 0; i <= nx; i++) {
-    const x = x1 - r - ((x1 - x0 - r * 2) * i) / nx;
-    pts.push({ x, y: y1 + wob(20 + i) });
-  }
-  /* левый бок */
-  for (let i = 1; i <= ny; i++) {
-    const y = y1 - r - ((y1 - y0 - r * 2) * i) / (ny + 1);
-    pts.push({ x: x0 + wob(30 + i), y });
-  }
-
-  const n = pts.length;
-  const at = (i) => pts[(i + n) % n];
-  let d = `M ${at(0).x.toFixed(1)} ${at(0).y.toFixed(1)}`;
-  for (let i = 0; i < n; i++) {
-    const p0 = at(i - 1);
-    const p1 = at(i);
-    const p2 = at(i + 1);
-    const p3 = at(i + 2);
-    const c1x = p1.x + (p2.x - p0.x) / 6;
-    const c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6;
-    const c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-  }
-  return d + " Z";
-}
-
-/* Перья пламени по краю: одна и та же тайловая картинка, бегущая по краю. */
-const NAMAZ_FLAME_TILE = (() => {
-  const spikes = [
-    [3, 11], [9, 16], [15, 9], [21, 14], [27, 7], [33, 15], [39, 10],
-    [45, 17], [51, 9], [57, 13], [63, 8],
-  ].map(([x, h]) => `<path d="M${x - 4} 16 Q${x} ${16 - h} ${x + 4} 16 Z" fill="url(#flameGrad)"/>`).join("");
-  const inner = spikes;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="16" viewBox="0 0 64 16">
-    <defs>
-      <linearGradient id="flameGrad" x1="0" y1="1" x2="0" y2="0">
-        <stop offset="0" stop-color="#ff8a2b" stop-opacity="0.95"/>
-        <stop offset="0.45" stop-color="#ffc247" stop-opacity="0.9"/>
-        <stop offset="1" stop-color="#fff3cf" stop-opacity="0.2"/>
-      </linearGradient>
-    </defs>${inner}</svg>`;
-  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
-})();
-
 /* Расписание дня вместе с намазами. */
 function dayTimeline(dateKey) {
   const base = currentTimeline(dateKey);
@@ -1679,27 +1603,22 @@ function renderTimeline() {
       });
 
       const prepMin = minutesOf(row.at) - minutesOf(row.prep);
-      /* слои света отдельно, контент — в .tl-namaz-inner поверх них,
-         чтобы текст всегда оставался читаемым */
       step.innerHTML = `
-        <span class="tl-namaz-edge" aria-hidden="true"></span>
         <span class="tl-namaz-glow" aria-hidden="true"></span>
-        <span class="tl-namaz-inner">
-          <span class="tl-namaz-steps" aria-hidden="true">
-            <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
+        <span class="tl-namaz-steps" aria-hidden="true">
+          <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
+        </span>
+        <span class="tl-namaz-main">
+          <span class="tl-namaz-title">${row.icon} ${row.label}</span>
+          <span class="tl-namaz-times">
+            <b>${row.at}</b>
+            <small>${row.prep} подготовка · ${row.until || ""}</small>
           </span>
-          <span class="tl-namaz-main">
-            <span class="tl-namaz-title">${row.icon} ${row.label}</span>
-            <span class="tl-namaz-times">
-              <b>${row.at}</b>
-              <small>${row.prep} подготовка · ${row.until || ""}</small>
-            </span>
-          </span>
-          <span class="tl-namaz-scale">
-            <span>${row.prep}</span>
-            <span class="mid">${row.at}</span>
-            <span>${row.end}</span>
-          </span>
+        </span>
+        <span class="tl-namaz-scale">
+          <span>${row.prep}</span>
+          <span class="mid">${row.at}</span>
+          <span>${row.end}</span>
         </span>
         ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
         ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
@@ -1736,32 +1655,6 @@ function renderTimeline() {
       });
       step.addEventListener("focus", () => document.body.classList.add("namaz-light"));
       step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
-
-      /* волнистая рамка: строим после вставки в DOM, когда известны размеры */
-      const buildEdge = () => {
-        const box = step.getBoundingClientRect();
-        /* рамка живёт в контейнере с inset: -5px, поэтому добавляем запас */
-        const w = Math.round(box.width) + 10 || 330;
-        const h = Math.round(box.height) + 10 || 66;
-        const seed = (row.id || "p").length + h;
-        const radius = parseFloat(getComputedStyle(step).borderRadius) || 16;
-        const d = namazWavePath(w, h, seed, radius);
-        const holder = step.querySelector(".tl-namaz-edge");
-        if (!holder) return;
-        holder.innerHTML = `
-          <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="namazEdgeGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#fff3cf"/>
-                <stop offset="0.4" stop-color="#ffc247"/>
-                <stop offset="0.75" stop-color="#ff8a2b"/>
-                <stop offset="1" stop-color="#ffe6a8"/>
-              </linearGradient>
-            </defs>
-            <path class="edge-core" d="${d}"/>
-          </svg>`;
-      };
-      requestAnimationFrame(buildEdge);
       if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
       root.appendChild(step);
       prevMinutes = to;

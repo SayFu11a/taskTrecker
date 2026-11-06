@@ -1590,33 +1590,35 @@ input::placeholder { color: #626880; }
 .night-row.done .night-time { color: var(--accent-2); }
 .night-note { font-size: 11px; color: var(--muted); }
 
-/* ─────────── намаз в расписании ───────────
-   База — ровно как в v15: тот же блок, тот же свет за курсором, та же
-   горящая кромка и то же разгорание при наведении.
-   Добавлено только одно: волнистая плавающая линия вокруг блока
-   (та, что понравилась в v18) — она и есть «живой край», рамки нет. */
+/* ─────────── намаз в расписании: золотой неон ─────────── */
+/* --mx/--my — координаты курсора внутри блока (ставит app.js),
+   от них двигается источник света. */
 
 .tl-namaz {
   --mx: 50%;
   --my: 50%;
   position: relative;
-  display: block;
-  margin: 8px 2px;
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 6px 2px;
   padding: 11px 13px 11px 10px;
   border-radius: 12px;
-  border: none;
+  border: 1px solid rgba(255, 199, 102, 0.5);
   background:
     linear-gradient(90deg, rgba(255, 199, 102, 0.14), rgba(255, 199, 102, 0.03) 60%),
     rgba(24, 20, 12, 0.6);
   color: #ffe6b8;
   cursor: pointer;
+  overflow: hidden;
   font: inherit;
   text-align: left;
   isolation: isolate;
   box-shadow:
     0 0 0 1px rgba(255, 199, 102, 0.10) inset,
     0 0 18px rgba(255, 183, 77, 0.14);
-  transition: transform 0.18s ease, box-shadow 0.3s ease;
+  transition: transform 0.18s ease, box-shadow 0.3s ease, border-color 0.3s ease;
   animation: namaz-breathe 5s ease-in-out infinite;
 }
 
@@ -1625,30 +1627,18 @@ input::placeholder { color: #626880; }
   50% { box-shadow: 0 0 0 1px rgba(255, 199, 102, 0.18) inset, 0 0 28px rgba(255, 183, 77, 0.24); }
 }
 
-/* контент — сетка как в v15, но отдельным слоем поверх света */
-.tl-namaz-inner {
-  position: relative;
-  z-index: 5;
-  display: grid;
-  grid-template-columns: 24px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  pointer-events: none;
-}
-
-/* свет, который ходит за мышкой внутри блока (v15) */
+/* свет, который ходит за мышкой внутри блока */
 .tl-namaz-glow {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 0;
-  border-radius: inherit;
+  z-index: -1;
   opacity: 0;
   background: radial-gradient(
     340px circle at var(--mx) var(--my),
-    rgba(255, 226, 168, 0.55),
-    rgba(255, 192, 92, 0.26) 38%,
-    rgba(255, 170, 55, 0.09) 62%,
+    rgba(255, 226, 168, 0.72),
+    rgba(255, 192, 92, 0.34) 38%,
+    rgba(255, 170, 55, 0.12) 62%,
     transparent 78%
   );
   transition: opacity 0.28s ease;
@@ -1656,12 +1646,12 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover .tl-namaz-glow,
 .tl-namaz.is-lit .tl-namaz-glow { opacity: 1; }
 
-/* края блока горят сильнее всего (v15) */
+/* края блока горят сильнее всего — маска оставляет только периметр */
 .tl-namaz::before {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 2;
   pointer-events: none;
   border-radius: inherit;
   padding: 1.5px;
@@ -1684,15 +1674,14 @@ input::placeholder { color: #626880; }
   mask-composite: exclude;
   filter: drop-shadow(0 0 6px rgba(255, 196, 92, 0.9));
 }
-.tl-namaz:hover::before,
-.tl-namaz.is-lit::before { opacity: 1; }
+.tl-namaz:hover::before { opacity: 1; }
 
-/* внутренняя обводка «огонь по краю» + общий жар (v15) */
+/* внутренняя обводка «огонь по краю» + общий жар блока */
 .tl-namaz::after {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 1;
   pointer-events: none;
   border-radius: inherit;
   opacity: 0;
@@ -1706,49 +1695,11 @@ input::placeholder { color: #626880; }
     transparent 65%
   );
 }
-.tl-namaz:hover::after,
-.tl-namaz.is-lit::after { opacity: 1; }
+.tl-namaz:hover::after { opacity: 1; }
 
-/* ── волнистая плавающая линия (v18) — единственное дополнение ── */
-.tl-namaz-edge {
-  position: absolute;
-  inset: -5px;
-  z-index: 4;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  overflow: visible;
-}
-.tl-namaz:hover .tl-namaz-edge,
-.tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
-.tl-namaz-edge svg { width: 100%; height: 100%; display: block; overflow: visible; }
-
-/* ровно одна линия: тёплая, с собственным мягким ореолом */
-.tl-namaz-edge .edge-core {
-  fill: none;
-  stroke: url(#namazEdgeGrad);
-  stroke-width: 2.4;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-  filter: drop-shadow(0 0 4px rgba(255, 196, 92, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 60, 0.45));
-}
-
-.tl-namaz:hover .tl-namaz-edge .edge-core,
-.tl-namaz.is-lit .tl-namaz-edge .edge-core {
-  animation: edge-flicker 2.6s ease-in-out infinite;
-}
-
-@keyframes edge-flicker {
-  0%, 100% { stroke-width: 2.4; opacity: 0.95; }
-  45% { stroke-width: 2.7; opacity: 1; }
-  72% { stroke-width: 2.3; opacity: 0.9; }
-}
-
-/* наведение — как v15 */
-.tl-namaz:hover,
-.tl-namaz.is-lit {
+.tl-namaz:hover {
+  border-color: rgba(255, 226, 170, 0.95);
   transform: translateY(-1px);
-  z-index: 6;
   animation: none;
   box-shadow:
     0 0 0 1px rgba(255, 236, 190, 0.55) inset,
@@ -1765,35 +1716,29 @@ input::placeholder { color: #626880; }
 .tl-namaz-steps .step-3 { width: 20px; }
 
 .tl-namaz-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tl-namaz-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #ffdc9e;
-  letter-spacing: 0.2px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-}
-.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 226, 178, 0.78); }
+.tl-namaz-title { font-size: 13px; font-weight: 600; color: #ffdc9e; letter-spacing: 0.2px; }
+.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 226, 178, 0.72); }
 .tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; }
-.tl-namaz-times small { color: rgba(255, 226, 178, 0.68); }
+.tl-namaz-times small { color: rgba(255, 226, 178, 0.62); }
 
 .tl-namaz-scale {
   display: flex; align-items: center; gap: 6px;
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
-  color: rgba(255, 226, 178, 0.6);
+  color: rgba(255, 226, 178, 0.55);
 }
 .tl-namaz-scale .mid { color: #ffd68a; font-weight: 600; }
 .tl-namaz-scale span + span::before { content: "→"; margin-right: 6px; color: rgba(255, 226, 178, 0.35); }
 
-.tl-namaz.is-now { box-shadow: 0 0 26px rgba(255, 196, 92, 0.5); }
-.tl-namaz.is-done { box-shadow: 0 0 22px rgba(120, 230, 200, 0.3); }
+.tl-namaz.is-now { border-color: rgba(255, 224, 160, 1); box-shadow: 0 0 26px rgba(255, 196, 92, 0.5); }
+.tl-namaz.is-done { border-color: rgba(120, 230, 200, 0.55); }
 .tl-namaz.is-done .tl-namaz-title { color: #a9f0dc; }
 .tl-namaz.is-past { opacity: 0.55; }
 .tl-namaz-now {
   position: absolute; right: 10px; bottom: 8px;
-  font-size: 10px; color: #ffd68a; text-transform: lowercase; z-index: 7;
+  font-size: 10px; color: #ffd68a; text-transform: lowercase;
 }
-.tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 7; color: #a9f0dc; font-weight: 700; }
+.tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 3; color: #a9f0dc; font-weight: 700; }
 
 /* кусок обычного блока, который начинается после намаза */
 .tl-row.is-cont { opacity: 0.92; background: rgba(255, 255, 255, 0.02); }
@@ -1807,72 +1752,74 @@ input::placeholder { color: #626880; }
   text-transform: lowercase;
 }
 
-/* ─────────── свет на всю страницу: пятно, лучи, солнечный зайчик ─────────── */
-/* Три fixed-слоя, все идут за курсором через --page-mx/--page-my.
-   Пятно — свет от намаза, лучи — расходятся за края экрана,
-   зайчик — блик «солнце в камеру», у него своя жизнь. */
-
-/* слой 1: большое тёплое пятно */
+/* ─────────── свет на всю страницу: большое пятно + лучи ─────────── */
+/* слой 1: широкое тёплое пятно, идёт за курсором */
 body::after {
   content: "";
   position: fixed;
-  inset: -20vmax;
+  inset: 0;
   pointer-events: none;
   z-index: 40;
   opacity: 0;
-  transform: scale(1.45);
+  transform: scale(1.6);
   transform-origin: var(--page-mx, 50%) var(--page-my, 35%);
-  transition: opacity 0.6s ease, transform 1.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.55s ease, transform 1.2s cubic-bezier(0.16, 1, 0.3, 1);
   background:
     radial-gradient(
-      640px circle at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 214, 140, 0.24),
-      rgba(255, 190, 90, 0.11) 32%,
-      rgba(255, 170, 55, 0.05) 55%,
-      transparent 78%
+      900px circle at var(--page-mx, 50%) var(--page-my, 35%),
+      rgba(255, 214, 140, 0.30),
+      rgba(255, 190, 90, 0.14) 32%,
+      rgba(255, 170, 55, 0.06) 55%,
+      transparent 76%
     ),
     radial-gradient(
-      320px circle at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 242, 210, 0.18),
+      420px circle at var(--page-mx, 50%) var(--page-my, 35%),
+      rgba(255, 240, 205, 0.22),
       transparent 70%
     );
   mix-blend-mode: screen;
 }
 body.namaz-light::after { opacity: 1; transform: scale(1); }
 
-/* слой 2: тонкие лучи, уходят за края экрана без обрезки */
+/* слой 2: лучи света, расходящиеся от курсора */
 body::before {
   content: "";
   position: fixed;
-  inset: -60vmax;
+  inset: 0;
   pointer-events: none;
   z-index: 41;
   opacity: 0;
-  transform: scale(0.8);
+  transform: scale(0.85);
   transform-origin: var(--page-mx, 50%) var(--page-my, 35%);
-  transition: opacity 0.5s ease, transform 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.45s ease, transform 1.1s cubic-bezier(0.16, 1, 0.3, 1);
   background:
     repeating-conic-gradient(
       from var(--ray-angle, 0deg) at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 236, 186, 0.22) 0deg 0.7deg,
-      rgba(255, 236, 186, 0) 0.7deg 9deg
+      rgba(255, 224, 160, 0.16) 0deg 2.2deg,
+      rgba(255, 224, 160, 0) 2.2deg 13deg
     ),
     repeating-conic-gradient(
-      from calc(var(--ray-angle, 0deg) + 4.4deg) at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 200, 100, 0.14) 0deg 0.45deg,
-      rgba(255, 200, 100, 0) 0.45deg 17deg
+      from calc(var(--ray-angle, 0deg) + 7deg) at var(--page-mx, 50%) var(--page-my, 35%),
+      rgba(255, 196, 92, 0.10) 0deg 0.9deg,
+      rgba(255, 196, 92, 0) 0.9deg 21deg
     );
-  /* маска без кольца на краю: свет просто уходит в бесконечность */
   -webkit-mask-image: radial-gradient(
-    circle at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 3%, #000 18%, #000 100%
+    760px circle at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 8%,
+    #000 26%,
+    #000 52%,
+    transparent 82%
   );
   mask-image: radial-gradient(
-    circle at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 3%, #000 18%, #000 100%
+    760px circle at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 8%,
+    #000 26%,
+    #000 52%,
+    transparent 82%
   );
   mix-blend-mode: screen;
-  animation: rays-turn 42s linear infinite;
+  filter: blur(0.6px);
+  animation: rays-turn 30s linear infinite;
 }
 body.namaz-light::before { opacity: 1; transform: scale(1); }
 
