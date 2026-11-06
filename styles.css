@@ -1670,8 +1670,15 @@ input::placeholder { color: #626880; }
 }
 .tl-namaz:hover .tl-namaz-edge,
 .tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
+/* при наведении старый ровный бордер уходит совсем, остаётся только волнистый */
 .tl-namaz:hover,
-.tl-namaz.is-lit { border-color: transparent; }
+.tl-namaz.is-lit {
+  border-color: transparent;
+  box-shadow:
+    0 0 60px rgba(255, 205, 110, 0.7),
+    0 0 150px rgba(255, 180, 70, 0.42),
+    0 0 260px rgba(255, 170, 60, 0.18);
+}
 
 /* блок не должен обрезать собственный край */
 .tl-namaz { overflow: visible; }
@@ -1704,7 +1711,9 @@ input::placeholder { color: #626880; }
   mask-composite: exclude;
   filter: drop-shadow(0 0 6px rgba(255, 196, 92, 0.9));
 }
-.tl-namaz:hover::before { opacity: 1; }
+/* кромка-прямоугольник отключена: край рисует только волна */
+.tl-namaz:hover::before,
+.tl-namaz.is-lit::before { opacity: 0; }
 
 /* внутренняя обводка «огонь по краю» + общий жар блока */
 .tl-namaz::after {
@@ -1727,12 +1736,13 @@ input::placeholder { color: #626880; }
 }
 .tl-namaz:hover::after { opacity: 1; }
 
-.tl-namaz:hover {
-  border-color: rgba(255, 226, 170, 0.95);
+/* наведение: старый бордер и его внутренняя обводка убраны — остаётся только волна */
+.tl-namaz:hover,
+.tl-namaz.is-lit {
+  border-color: transparent;
   transform: translateY(-1px);
   animation: none;
   box-shadow:
-    0 0 0 1px rgba(255, 236, 190, 0.55) inset,
     0 0 60px rgba(255, 205, 110, 0.7),
     0 0 150px rgba(255, 180, 70, 0.42),
     0 0 260px rgba(255, 170, 60, 0.18);
