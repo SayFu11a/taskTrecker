@@ -1773,34 +1773,16 @@ input::placeholder { color: #626880; }
   font-size: 13px; font-weight: 600; color: #ffdc9e; letter-spacing: 0.2px;
   transition: font-size 0.18s ease, color 0.18s ease;
 }
-/* при наведении текст крупнее и контрастнее — за счёт «стекла».
-   Шрифт не трогаем: размеры элемента не меняются, соседи не сдвигаются. */
-/* статичная часть блока: содержимое + ступеньки. На неё вешаем SVG-фильтр
-   «линзы» (край не трогаем — его волны анимируются, фильтр на них
-   пересчитывался бы каждый кадр). */
-.lens-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
-
-.tl-namaz-core {
-  display: grid;
-  grid-template-columns: 26px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  grid-column: 1 / -1;
-  position: relative;
-  z-index: 2;
-  /* центр «раздувания» — там, где курсор: только transform, это дёшево */
-  transform-origin: var(--mx, 50%) var(--my, 50%);
+/* при наведении текст крупнее и контрастнее.
+   Масштабируем transform'ом, а не размером шрифта: размеры элемента не меняются,
+   поэтому соседние строки не сдвигаются. */
+.tl-namaz:hover .tl-namaz-inner,
+.tl-namaz.is-lit .tl-namaz-inner {
+  transform: scale(1.06);
+  transform-origin: left center;
+  transition: transform 0.2s ease;
 }
-/* лупа как у Apple: соседние элементы не двигаются, а сам блок «раздувается»
-   из точки под курсором (transform-origin = позиция мыши) */
-.tl-namaz.is-lit .tl-namaz-core {
-  transform: scale(1.17);
-  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* линза включается только пока мышь над блоком: пока её нет — страница
-   рисуется без SVG-фильтра вообще (никакой платы за эффект в покое) */
-body.lens-on .tl-namaz.is-lit .tl-namaz-core { filter: url(#namazLens); }
+.tl-namaz-inner { transition: transform 0.2s ease; }
 .tl-namaz:hover .tl-namaz-title,
 .tl-namaz.is-lit .tl-namaz-title {
   color: #fff4dc;
