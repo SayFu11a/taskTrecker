@@ -1646,6 +1646,35 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover .tl-namaz-glow,
 .tl-namaz.is-lit .tl-namaz-glow { opacity: 1; }
 
+/* ── сам край блока становится волнистым при наведении ──
+   Ровный border прячем и включаем SVG-контур: одна линия по периметру,
+   никаких вторых рамок. */
+.tl-namaz-edge {
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.28s ease;
+  overflow: visible;
+}
+.tl-namaz-edge svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.tl-namaz-edge .edge-core {
+  fill: none;
+  stroke: url(#namazEdgeGrad);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px rgba(255, 196, 92, 0.8));
+}
+.tl-namaz:hover .tl-namaz-edge,
+.tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
+.tl-namaz:hover,
+.tl-namaz.is-lit { border-color: transparent; }
+
+/* блок не должен обрезать собственный край */
+.tl-namaz { overflow: visible; }
+
 /* края блока горят сильнее всего — маска оставляет только периметр */
 .tl-namaz::before {
   content: "";

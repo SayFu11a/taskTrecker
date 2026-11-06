@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v15";
+const BUILD_LABEL = "сборка v16";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1146,6 +1146,73 @@ function cutInterval(piece, ev) {
   return out;
 }
 
+/* ─────────── волнистый край блока намаза ───────────
+   Один контур по самому краю блока: прямая линия идёт по периметру
+   с мелкими волнами. Это и есть граница блока — второй рамки нет. */
+function namazWavePath(w, h, seed) {
+  const rnd = (i) => {
+    const x = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const radius = 12;
+  const amp = 1.8;          // высота волны
+  const step = 22;          // длина волны
+  const inset = 1;
+
+  const pts = [];
+  const x0 = inset + radius;
+  const x1 = w - inset - radius;
+  const y0 = inset;
+  const y1 = h - inset;
+
+  /* верх */
+  let n = Math.max(3, Math.round((x1 - x0) / step));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = x0 + (x1 - x0) * t;
+    const wave = Math.sin(t * Math.PI * n) * amp;
+    pts.push({ x, y: y0 + wave + (rnd(i) - 0.5) * 0.7 });
+  }
+  /* правый бок */
+  const ny = Math.max(1, Math.round((y1 - y0 - radius * 2) / step));
+  for (let i = 1; i <= ny; i++) {
+    const t = i / (ny + 1);
+    const y = y0 + radius + (y1 - y0 - radius * 2) * t;
+    const wave = Math.sin(t * Math.PI * ny) * amp;
+    pts.push({ x: w - inset + wave + (rnd(10 + i) - 0.5) * 0.7, y });
+  }
+  /* низ */
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = x1 - (x1 - x0) * t;
+    const wave = Math.sin(t * Math.PI * n) * amp;
+    pts.push({ x, y: y1 + wave + (rnd(20 + i) - 0.5) * 0.7 });
+  }
+  /* левый бок */
+  for (let i = 1; i <= ny; i++) {
+    const t = i / (ny + 1);
+    const y = y1 - radius - (y1 - y0 - radius * 2) * t;
+    const wave = Math.sin(t * Math.PI * ny) * amp;
+    pts.push({ x: inset + wave + (rnd(30 + i) - 0.5) * 0.7, y });
+  }
+
+  const N = pts.length;
+  const at = (i) => pts[(i + N) % N];
+  let d = `M ${at(0).x.toFixed(1)} ${at(0).y.toFixed(1)}`;
+  for (let i = 0; i < N; i++) {
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d + " Z";
+}
+
 /* Расписание дня вместе с намазами. */
 function dayTimeline(dateKey) {
   const base = currentTimeline(dateKey);
@@ -1604,6 +1671,7 @@ function renderTimeline() {
 
       const prepMin = minutesOf(row.at) - minutesOf(row.prep);
       step.innerHTML = `
+        <span class="tl-namaz-edge" aria-hidden="true"></span>
         <span class="tl-namaz-glow" aria-hidden="true"></span>
         <span class="tl-namaz-steps" aria-hidden="true">
           <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
@@ -1655,6 +1723,27 @@ function renderTimeline() {
       });
       step.addEventListener("focus", () => document.body.classList.add("namaz-light"));
       step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
+      /* сам край блока становится волнистым: строим контур по его размеру */
+      requestAnimationFrame(() => {
+        const box = step.getBoundingClientRect();
+        const w = Math.round(box.width) || 320;
+        const h = Math.round(box.height) || 54;
+        const holder = step.querySelector(".tl-namaz-edge");
+        if (!holder || w < 40) return;
+        const d = namazWavePath(w, h, (row.id || "p").length + h);
+        holder.innerHTML = `
+          <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="namazEdgeGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#fff3cf"/>
+                <stop offset="0.45" stop-color="#ffcf7a"/>
+                <stop offset="1" stop-color="#ffb04d"/>
+              </linearGradient>
+            </defs>
+            <path class="edge-core" d="${d}"/>
+          </svg>`;
+      });
+
       if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
       root.appendChild(step);
       prevMinutes = to;
