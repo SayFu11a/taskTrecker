@@ -1869,9 +1869,9 @@ input::placeholder { color: #626880; }
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
-    rgba(255, 216, 148, 0.16),
-    rgba(255, 194, 96, 0.08) 34%,
-    rgba(255, 172, 56, 0.03) 58%,
+    rgba(255, 216, 148, 0.12),
+    rgba(255, 194, 96, 0.06) 34%,
+    rgba(255, 172, 56, 0.025) 58%,
     transparent 78%
   );
   transform: scale(0.8);
@@ -1880,7 +1880,32 @@ input::placeholder { color: #626880; }
 }
 .namaz-glow-layer.on .spot-disc { transform: scale(1); }
 
-/* ── лучи ── */
+/* ареол вокруг курсора — маленькое видимое кольцо света */
+.halo {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 460px;
+  height: 460px;
+  margin: -230px 0 0 -230px;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      closest-side,
+      rgba(255, 224, 168, 0.10),
+      rgba(255, 200, 108, 0.09) 26%,
+      rgba(255, 186, 84, 0.13) 46%,
+      rgba(255, 176, 64, 0.06) 64%,
+      transparent 80%
+    );
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.45s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+.namaz-glow-layer.on .halo { opacity: 1; transform: scale(1); }
+
+/* ── лучи ── тонкие, тёмные, чуть заметные ── */
 .rays-scale {
   position: absolute;
   left: 0;
@@ -1899,27 +1924,22 @@ input::placeholder { color: #626880; }
   position: absolute;
   left: 0;
   top: 0;
-  width: 240vmax;
-  height: 240vmax;
-  margin: -120vmax 0 0 -120vmax;
+  width: 150vmax;
+  height: 150vmax;
+  margin: -75vmax 0 0 -75vmax;
   border-radius: 50%;
   background:
-    /* мягкое затухание к краю круга — вместо маски (маска дорогая) */
-    radial-gradient(
-      closest-side,
-      transparent 18%,
-      rgba(8, 9, 13, 0.35) 55%,
-      rgba(8, 9, 13, 0.95) 82%,
-      #08090d 100%
+    repeating-conic-gradient(
+      rgba(255, 222, 160, 0.075) 0deg 0.5deg,
+      rgba(255, 222, 160, 0) 0.5deg 11deg
     ),
     repeating-conic-gradient(
-      rgba(255, 224, 160, 0.16) 0deg 2.2deg,
-      rgba(255, 224, 160, 0) 2.2deg 13deg
-    ),
-    repeating-conic-gradient(
-      rgba(255, 196, 92, 0.10) 0deg 0.9deg,
-      rgba(255, 196, 92, 0) 0.9deg 21deg
+      rgba(255, 196, 92, 0.05) 0deg 0.35deg,
+      rgba(255, 196, 92, 0) 0.35deg 17deg
     );
+  /* мягкое затухание к краю: статичная маска, считается один раз, а не каждый кадр */
+  -webkit-mask-image: radial-gradient(closest-side, #000 12%, rgba(0, 0, 0, 0.55) 46%, transparent 88%);
+  mask-image: radial-gradient(closest-side, #000 12%, rgba(0, 0, 0, 0.55) 46%, transparent 88%);
   animation: rays-turn 60s linear infinite;
   will-change: transform;
 }
