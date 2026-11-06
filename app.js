@@ -897,11 +897,22 @@ function renderHero() {
     (sum, w) => sum + Object.values(w).filter(Boolean).length,
     0
   );
+  /* намазы за всё время — только если блок включён */
+  let namazChip = "";
+  if (typeof namazEnabled === "function" && namazEnabled()) {
+    const namazTotal = Object.values(state.namaz || {}).reduce(
+      (sum, day) => sum + Object.keys(day || {}).length,
+      0
+    );
+    namazChip = `<span class="chip">🕌 Намазов <b>${namazTotal}</b></span>`;
+  }
+
   root.innerHTML = `
     <span class="chip">🔥 Серия <b>${s} ${plural(s, "день", "дня", "дней")}</b></span>
     <span class="chip">✅ Закрыто дней <b>${cd}</b></span>
     <span class="chip">💪 Тренировок <b>${gymDone}</b></span>
-    <span class="chip">🧩 LeetCode <b>${state.leetcode.length}</b></span>`;
+    <span class="chip">🧩 LeetCode <b>${state.leetcode.length}</b></span>
+    ${namazChip}`;
 }
 
 function plural(n, one, few, many) {
