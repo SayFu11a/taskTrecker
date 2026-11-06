@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v20";
+const BUILD_LABEL = "сборка v21";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1741,7 +1741,7 @@ function renderTimeline() {
               </linearGradient>
             </defs>
             <path class="edge-core" d="${frames[0]}" pathLength="1000">
-              <animate attributeName="d" dur="4.2s" repeatCount="indefinite"
+              <animate attributeName="d" dur="2.6s" repeatCount="indefinite"
                        calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
             </path>
           </svg>`;

@@ -1740,7 +1740,7 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover,
 .tl-namaz.is-lit {
   border-color: transparent;
-  transform: translateY(-1px);
+  transform: translateY(-1px) scale(1.015);
   animation: none;
   box-shadow:
     0 0 60px rgba(255, 205, 110, 0.7),
@@ -1756,9 +1756,27 @@ input::placeholder { color: #626880; }
 .tl-namaz-steps .step-3 { width: 20px; }
 
 .tl-namaz-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tl-namaz-title { font-size: 13px; font-weight: 600; color: #ffdc9e; letter-spacing: 0.2px; }
-.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 226, 178, 0.72); }
-.tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; }
+.tl-namaz-title {
+  font-size: 13px; font-weight: 600; color: #ffdc9e; letter-spacing: 0.2px;
+  transition: font-size 0.18s ease, color 0.18s ease;
+}
+/* при наведении текст крупнее и контрастнее, чтобы читался поверх света */
+.tl-namaz:hover .tl-namaz-title,
+.tl-namaz.is-lit .tl-namaz-title {
+  font-size: 14.5px;
+  color: #fff4dc;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 232, 190, 0.8); transition: font-size 0.18s ease; }
+.tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; transition: font-size 0.18s ease; }
+.tl-namaz:hover .tl-namaz-times,
+.tl-namaz.is-lit .tl-namaz-times { font-size: 12px; color: rgba(255, 240, 210, 0.95); }
+.tl-namaz:hover .tl-namaz-times b,
+.tl-namaz.is-lit .tl-namaz-times b { font-size: 14px; color: #ffe4ae; }
+.tl-namaz:hover .tl-namaz-times small,
+.tl-namaz.is-lit .tl-namaz-times small { color: rgba(255, 236, 200, 0.9); }
+.tl-namaz:hover .tl-namaz-scale,
+.tl-namaz.is-lit .tl-namaz-scale { font-size: 11.5px; color: rgba(255, 238, 205, 0.95); }
 .tl-namaz-times small { color: rgba(255, 226, 178, 0.62); }
 
 .tl-namaz-scale {
@@ -1825,7 +1843,7 @@ body.namaz-light::after { opacity: 1; transform: scale(1); }
 body::before {
   content: "";
   position: fixed;
-  inset: 0;
+  inset: -80vmax;
   pointer-events: none;
   z-index: 41;
   opacity: 0;
@@ -1843,23 +1861,23 @@ body::before {
       rgba(255, 196, 92, 0.10) 0deg 0.9deg,
       rgba(255, 196, 92, 0) 0.9deg 21deg
     );
+  /* лучи уходят далеко за края экрана: только мягкое начало у курсора,
+     никакой внешней границы */
   -webkit-mask-image: radial-gradient(
-    760px circle at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 8%,
-    #000 26%,
-    #000 52%,
-    transparent 82%
+    circle 150vmax at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 6%,
+    #000 24%,
+    #000 100%
   );
   mask-image: radial-gradient(
-    760px circle at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 8%,
-    #000 26%,
-    #000 52%,
-    transparent 82%
+    circle 150vmax at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 6%,
+    #000 24%,
+    #000 100%
   );
   mix-blend-mode: screen;
   filter: blur(0.6px);
-  animation: rays-turn 30s linear infinite;
+  animation: rays-turn 55s linear infinite;
 }
 body.namaz-light::before { opacity: 1; transform: scale(1); }
 
