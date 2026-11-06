@@ -259,6 +259,8 @@ async function pushSettings() {
         schedule_view: state.scheduleView,
         achievements: state.achievements || {},
         leetcode: state.leetcode || [],
+        namaz: state.namaz || {},
+        namaz_on: state.namazOn !== false,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }
@@ -289,6 +291,16 @@ async function pullSettings() {
       state.achievements = { ...(state.achievements || {}), ...data.achievements };
     }
     if (Array.isArray(data.leetcode) && data.leetcode.length) state.leetcode = data.leetcode;
+    /* отметки намаза сливаем: выполненные на любом устройстве остаются выполненными */
+    if (data.namaz && typeof data.namaz === "object") {
+      const local = state.namaz || {};
+      const merged = { ...data.namaz };
+      Object.keys(local).forEach((date) => {
+        merged[date] = { ...(merged[date] || {}), ...local[date] };
+      });
+      state.namaz = merged;
+    }
+    if (typeof data.namaz_on === "boolean") state.namazOn = data.namaz_on;
     saveLocalOnly();
     renderAll();
   } catch (e) {

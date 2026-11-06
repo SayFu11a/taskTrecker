@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v9";
+const BUILD_LABEL = "сборка v10";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -12,6 +12,8 @@ const DEFAULT_STATE = {
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
   hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — единственный источник: минуты
+  namaz: {},        // { "2026-11-06": { fajr: true, ... } } — отмеченные намазы
+  namazOn: true,    // показывать блок намаза
   timer: null,      // legacy, не используется: таймер живёт в state.hours[дата][блок].timer
   scheduleView: "detail", // "detail" | "coarse"
   achievements: {}, // { id: ISO-дата открытия }
@@ -713,6 +715,131 @@ function renderModes() {
 
 /* ─────────────── плохой день ─────────────── */
 
+/* ─────────────── намаз ─────────────── */
+
+function namazEnabled() {
+  return state.namazOn !== false;
+}
+
+function namazMarks(dateKey) {
+  return (state.namaz || {})[dateKey] || {};
+}
+
+function namazDone(dateKey, id) {
+  return Boolean(namazMarks(dateKey)[id]);
+}
+
+function toggleNamaz(dateKey, id) {
+  if (isFutureDate(dateKey)) {
+    toast("Это будущий день — намаз отметить нельзя заранее.");
+    return;
+  }
+  if (!state.namaz) state.namaz = {};
+  const day = state.namaz[dateKey] || (state.namaz[dateKey] = {});
+  if (day[id]) delete day[id];
+  else day[id] = true;
+  if (!Object.keys(day).length) delete state.namaz[dateKey];
+  touchDay(dateKey);
+  save();
+  renderNamaz();
+  renderNow();
+  play(day[id] ? "markGood" : "tick");
+  if (day[id]) toast(`${NAMAZ_NAMES[id]} отмечен.`);
+}
+
+function namazCount(dateKey) {
+  return NAMAZ_IDS.filter((id) => namazDone(dateKey, id)).length;
+}
+
+const NAMAZ_SKIP_KEY = "vp-tracker-namaz-skip";
+
+function namazSkipToday() {
+  try {
+    return localStorage.getItem(NAMAZ_SKIP_KEY) === todayKey();
+  } catch {
+    return false;
+  }
+}
+
+function setNamazSkipToday(on) {
+  try {
+    if (on) localStorage.setItem(NAMAZ_SKIP_KEY, todayKey());
+    else localStorage.removeItem(NAMAZ_SKIP_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function renderNamaz() {
+  const root = document.getElementById("prayerCard");
+  if (!root) return;
+
+  if (!namazEnabled()) {
+    root.innerHTML = "";
+    root.style.display = "none";
+    return;
+  }
+  root.style.display = "";
+  root.innerHTML = "";
+
+  const now = new Date();
+  const nowKey = keyOf(now);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const dateKey = isFutureDate(selectedDate) ? nowKey : selectedDate;
+  const times = namazTimes(dateKey);
+  const day = namazDay(dateKey);
+  const marks = namazMarks(dateKey);
+  const done = namazCount(dateKey);
+
+  const head = el("div", "prayer-head");
+  head.innerHTML = `
+    <div>
+      <div class="prayer-title">🕌 Намаз · ${NAMAZ_CITY.name}</div>
+      <div class="prayer-sub">${times.official ? "Муфтият ЧР, аср — одинарная тень" : "расчёт по солнцу, официальных данных на этот год нет"}${dateKey !== nowKey ? ` · ${DATE_FMT.format(dateOf(dateKey))}` : ""}</div>
+    </div>
+    <div class="prayer-count"><b>${done}</b>/5</div>`;
+  root.appendChild(head);
+
+  if (dateKey === nowKey && namazSkipToday()) {
+    const skip = el("p", "prayer-skip");
+    skip.innerHTML = `Намаз сегодня пропущен — не считается провалом. <button type="button" class="prayer-link" data-unsleep>вернуть</button>`;
+    skip.querySelector("[data-unsleep]").addEventListener("click", () => {
+      setNamazSkipToday(false);
+      renderNamaz();
+      renderNow();
+    });
+    root.appendChild(skip);
+  }
+
+  const list = el("div", "prayer-list");
+  day.forEach((p) => {
+    const isDone = Boolean(marks[p.id]);
+    const isCurrent = dateKey === nowKey && nowMin >= p.at && nowMin < p.end;
+    const isPast = dateKey === nowKey && nowMin >= p.end;
+
+    const row = el(
+      "button",
+      "prayer-row" + (isDone ? " is-done" : "") + (isCurrent ? " is-now" : "") + (isPast && !isDone ? " is-missed" : "")
+    );
+    row.type = "button";
+    row.title = isDone ? "Снять отметку" : "Отметить, что намаз выполнен";
+    row.innerHTML = `
+      <span class="prayer-icon">${p.icon}</span>
+      <span class="prayer-name">${p.name}<small>${p.until} · до ${namazHHMM(p.end)}</small></span>
+      <span class="prayer-time">${p.time}</span>
+      <span class="prayer-mark">${isDone ? "✓" : ""}</span>`;
+    row.addEventListener("click", () => toggleNamaz(dateKey, p.id));
+    list.appendChild(row);
+  });
+  root.appendChild(list);
+
+  const foot = el("div", "prayer-foot");
+  const sunrise = times.sunrise ? ` · восход ${times.sunrise}` : "";
+  const fajr = day[0];
+  foot.textContent = `Фаджр ${fajr.time} · подъём в это время${sunrise}`;
+  root.appendChild(foot);
+}
+
 function renderBadDay() {
   document.getElementById("badDayTotal").textContent = BAD_DAY.total;
   const list = document.getElementById("badDayList");
@@ -899,14 +1026,42 @@ function minutesOf(hhmm) {
   return h * 60 + m;
 }
 
-function currentTimeline() {
+/* Сдвиг расписания под намаз: день начинается с фаджра, а не с 09:00.
+   Всё, что было до начала (подъём, тренировка), сдвигается на подъём = фаджр. */
+function scheduleShift(dateKey) {
+  if (typeof namazEnabled !== "function" || !namazEnabled()) return 0;
+  const t = namazTimes(dateKey);
+  const fajr = namazMinutes(t.fajr);
+  const baseStart = 9 * 60; // расписание в data.js начинается в 09:00
+  /* если фаджр позже 09:00 (зимой он раньше), не двигаем в прошлое */
+  const shift = fajr - baseStart;
+  return Math.max(-180, Math.min(180, shift));
+}
+
+function shiftTime(hhmm, deltaMin) {
+  if (!deltaMin) return hhmm;
+  const total = minutesOf(hhmm) + deltaMin;
+  const t = ((total % 1440) + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+/* Расписание на конкретный день — с поправкой на фаджр. */
+function currentTimeline(dateKey) {
   const view = state.scheduleView === "coarse" ? "coarse" : "detail";
-  return SCHEDULE_VIEWS[view].timeline;
+  const base = SCHEDULE_VIEWS[view].timeline;
+  const key = dateKey || selectedDate;
+  const shift = scheduleShift(key);
+  if (!shift) return base;
+  return base.map((slot) => ({
+    ...slot,
+    from: shiftTime(slot.from, shift),
+    to: shiftTime(slot.to, shift),
+  }));
 }
 
 /* Какой сейчас интервал. Возвращает {slot, index, left, next} или null вне расписания. */
-function slotNow(date) {
-  const timeline = currentTimeline();
+function slotNow(date, dateKey) {
+  const timeline = currentTimeline(dateKey);
   const mins = date.getHours() * 60 + date.getMinutes();
   for (let i = 0; i < timeline.length; i++) {
     const from = minutesOf(timeline[i].from);
@@ -957,7 +1112,7 @@ function renderNow() {
   const dow = (now.getDay() + 6) % 7;
   const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const mode = modeFor(nowKey);
-  const info = slotNow(now);
+  const info = slotNow(now, nowKey);
   const workout = workoutForWeekday(dow);
   const wt = workoutText(workout);
 
@@ -1031,6 +1186,31 @@ function renderNow() {
     }
   }
 
+  /* намаз: что идёт сейчас и сколько осталось */
+  let namazLine = "";
+  if (typeof namazEnabled === "function" && namazEnabled() && isToday) {
+    const t = namazTimes(nowKey);
+    if (namazSkipToday()) {
+      namazLine = `<div class="now-namaz">🕌 Намаз на сегодня пропущен — просто отметь время и живи дальше.</div>`;
+    } else {
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const st = namazNow(nowKey, nowMin);
+      const marks = namazMarks(nowKey);
+      if (st.current) {
+        const left = st.current.end - nowMin;
+        const isDone = Boolean(marks[st.current.id]);
+        namazLine = `<div class="now-namaz${isDone ? " is-done" : ""}">🕌 ${st.current.name} · ${st.current.time}${
+          isDone ? " — отмечен ✓" : ` — до ${namazHHMM(st.current.end)}, осталось ${fmtMinutes(left)}`
+        }</div>`;
+      } else if (st.next) {
+        const inMin = st.next.at - nowMin;
+        namazLine = `<div class="now-namaz">🕌 Следующий намаз — ${st.next.name} в ${st.next.time}${
+          inMin > 0 ? ` · через ${fmtMinutes(inMin)}` : ""
+        }</div>`;
+      }
+    }
+  }
+
   /* идущий таймер виден и здесь, даже если открыт другой интервал дня */
   const liveTimer = runningTimers()[0];
   if (liveTimer) {
@@ -1057,6 +1237,7 @@ function renderNow() {
       </div>
     </div>
     <div class="now-progress"><span style="width:${pct}%"></span></div>
+    ${namazLine}
     ${blockLine}
     <div class="now-foot">
       ${next ? `<span class="now-next">Дальше ${next.from} · ${next.label}</span>` : `<span class="now-next">Последний блок дня</span>`}
@@ -1087,10 +1268,10 @@ function renderNow() {
 function renderTimeline() {
   const root = document.getElementById("timeline");
   if (!root) return;
-  const timeline = currentTimeline();
+  const timeline = currentTimeline(selectedDate);
   const now = new Date();
   const nowKey = keyOf(now);
-  const active = selectedDate === nowKey ? slotNow(now) : null;
+  const active = selectedDate === nowKey ? slotNow(now, nowKey) : null;
   const target = targetLevelFor(selectedDate);
 
   root.innerHTML = "";
@@ -1393,6 +1574,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 /* ─────────────── рендер ─────────────── */
 
 function renderAll() {
+  if (typeof renderNamaz === "function") renderNamaz();
   renderModes();
   renderBlocks();
   renderRing();
@@ -1470,6 +1652,41 @@ function applyLiveLevel(card, blockId, minutes) {
 }
 setInterval(tickTimerLabel, 1000);
 
+/* ─────────── напоминания на намаз: за 20 минут и в момент начала ───────────
+   Работает, пока вкладка открыта. Пуш из сервис-воркера — отдельная история,
+   здесь простые локальные уведомления и тост, чтобы не пропустить. */
+const namazNotified = new Set();
+
+function namazTick() {
+  if (typeof namazEnabled !== "function" || !namazEnabled()) return;
+  const now = new Date();
+  const nowKey = keyOf(now);
+  if (namazSkipToday()) return;
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  namazDay(nowKey).forEach((p) => {
+    [20, 0].forEach((ahead) => {
+      const key = `${nowKey}:${p.id}:${ahead}`;
+      if (nowMin !== p.at - ahead || namazNotified.has(key)) return;
+      namazNotified.add(key);
+      const text =
+        ahead === 0
+          ? `Время ${p.name} — ${p.time}.`
+          : `${p.name} через 20 минут — в ${p.time}.`;
+      toast(text);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+        try {
+          new Notification("🕌 " + p.name, { body: text, icon: "./icon-192.png", tag: "namaz-" + p.id });
+        } catch {
+          /* браузер может запретить — молча живём дальше */
+        }
+      }
+      if (typeof play === "function") play("tick");
+    });
+  });
+}
+setInterval(namazTick, 20000);
+
 /* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
 setInterval(() => {
   renderNow();
@@ -1501,6 +1718,52 @@ if (!localStorage.getItem(STORE_KEY + ":seen")) {
 }
 
 /* ─────────────── настройки звука ─────────────── */
+
+function renderNamazBox() {
+  const root = document.getElementById("namazBox");
+  if (!root) return;
+  const on = namazEnabled();
+  const nowKey = todayKey();
+  const t = namazTimes(nowKey);
+  const skipped = namazSkipToday();
+
+  root.innerHTML = `
+    <div class="acc-row">
+      <span class="acc-dot ${on ? "on" : "off"}"></span>
+      <div>
+        <div class="acc-title">Намаз · ${NAMAZ_CITY.name}</div>
+        <div class="acc-sub">${
+          on
+            ? `${t.source}. Восход ${t.sunrise || "—"}, фаджр ${t.fajr} — подъём в это время. Отметки намазов и напоминание за 20 минут до и в момент начала.`
+            : "Блок намаза скрыт."
+        }</div>
+      </div>
+    </div>
+    <div class="sfx-actions">
+      <button class="ghost-btn acc-btn" id="namazToggle">${on ? "Выключить" : "Включить"}</button>
+      ${on ? `<button class="ghost-btn acc-btn" id="namazSkipBtn">${skipped ? "Вернуть намаз на сегодня" : "Пропустить сегодня"}</button>` : ""}
+    </div>`;
+
+  document.getElementById("namazToggle").addEventListener("click", () => {
+    state.namazOn = !on;
+    save();
+    renderNamazBox();
+    renderNamaz();
+    renderNow();
+  });
+
+  const skipBtn = document.getElementById("namazSkipBtn");
+  if (skipBtn) {
+    skipBtn.addEventListener("click", () => {
+      setNamazSkipToday(!skipped);
+      renderNamazBox();
+      renderNamaz();
+      renderNow();
+    });
+  }
+}
+
+renderNamazBox();
 
 function renderSfxBox() {
   const root = document.getElementById("sfxBox");
