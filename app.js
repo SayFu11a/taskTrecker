@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v12";
+const BUILD_LABEL = "сборка v31";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -738,13 +738,19 @@ function toggleNamaz(dateKey, id) {
   const day = state.namaz[dateKey] || (state.namaz[dateKey] = {});
   if (day[id]) delete day[id];
   else day[id] = true;
+  const marked = Boolean(day[id]);
   if (!Object.keys(day).length) delete state.namaz[dateKey];
   touchDay(dateKey);
   save();
+  /* перерисовываем всё, где виден намаз: карточку, «Сейчас», расписание и счётчик.
+     Раньше расписание не обновлялось — поэтому галочка появлялась только после
+     перезагрузки, а повторный клик «не снимал» отметку. */
   renderNamaz();
   renderNow();
-  play(day[id] ? "markGood" : "tick");
-  if (day[id]) toast(`${NAMAZ_NAMES[id]} отмечен.`);
+  renderTimeline();
+  renderHero();
+  play(marked ? "markGood" : "tick");
+  if (marked) toast(`${NAMAZ_NAMES[id]} отмечен.`);
 }
 
 function namazSourceText(times, dateKey) {
@@ -1121,6 +1127,154 @@ function nightNow(date) {
   return { phase: "after", plan };
 }
 
+/* ─────────── намаз внутри расписания ───────────
+   Каждый дневной намаз занимает в графике три ступеньки:
+   подготовка (10 мин) → сам намаз (10 мин) → возврат к делу.
+   Блоки, в которые попадает намаз, разрезаются на две части,
+   вторая помечается «(продолжение)». Фаджр сюда не попадает:
+   он до 09:00 и живёт в ночном блоке. */
+
+const NAMAZ_PREP_MIN = 10;   // подготовка до намаза
+const NAMAZ_PRAYER_MIN = 10; // сколько отводим на сам намаз
+
+/* Вырезать из куска [from,to) интервал события. */
+function cutInterval(piece, ev) {
+  if (ev.to <= piece.from || ev.from >= piece.to) return [piece];
+  const out = [];
+  if (ev.from > piece.from) out.push({ from: piece.from, to: Math.min(ev.from, piece.to) });
+  if (ev.to < piece.to) out.push({ from: Math.max(ev.to, piece.from), to: piece.to });
+  return out;
+}
+
+/* ─────────── волнистый край блока намаза ───────────
+   Край блока — крупные круглые волны (как на референсе).
+   Волны физически бегут по периметру: путь пересчитывается по фазе,
+   а SVG-анимация морфит между фазами — гребни едут по кругу. */
+
+const NAMAZ_WAVE_BULGE = 4;   // насколько волна выступает наружу
+const NAMAZ_WAVE_LEN = 18;    // длина одной волны, px
+const NAMAZ_WAVE_STEP = 3;    // шаг сэмплирования (меньше — плавнее морф)
+
+/* Один периметр с фазой phase (0..1). Возвращает строку path. */
+function namazWavePath(w, h, phase) {
+  const pad = NAMAZ_WAVE_BULGE + 1;
+  const x0 = pad;
+  const y0 = pad;
+  const x1 = w - pad;
+  const y1 = h - pad;
+
+  const pts = [];
+  const push = (x, y, nx, ny, offset) => {
+    const wave = NAMAZ_WAVE_BULGE * (0.5 + 0.5 * Math.sin(offset));
+    pts.push([x + nx * wave, y + ny * wave]);
+  };
+
+  /* верх: слева → направо, волна наружу (ny = -1) */
+  const topLen = x1 - x0;
+  const topN = Math.max(2, Math.round(topLen / NAMAZ_WAVE_STEP));
+  for (let i = 0; i < topN; i++) {
+    const t = i / topN;
+    const along = t * topLen;
+    push(x0 + along, y0, 0, -1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* правый бок: сверху вниз */
+  const sideLen = y1 - y0;
+  const sideN = Math.max(2, Math.round(sideLen / NAMAZ_WAVE_STEP));
+  for (let i = 0; i < sideN; i++) {
+    const t = i / sideN;
+    const along = t * sideLen;
+    push(x1, y0 + along, 1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* низ: справа налево */
+  for (let i = 0; i < topN; i++) {
+    const t = i / topN;
+    const along = t * topLen;
+    push(x1 - along, y1, 0, 1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+  /* левый бок: снизу вверх */
+  for (let i = 0; i < sideN; i++) {
+    const t = i / sideN;
+    const along = t * sideLen;
+    push(x0, y1 - along, -1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
+  }
+
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
+  }
+  return d + " Z";
+}
+
+/* Кадры анимации: волны едут по кругу, 8 фаз на цикл. */
+function namazWaveFrames(w, h) {
+  const total = 8;
+  const frames = [];
+  for (let i = 0; i < total; i++) frames.push(namazWavePath(w, h, i / total));
+  return frames;
+}
+
+/* Расписание дня вместе с намазами. */
+function dayTimeline(dateKey) {
+  const base = currentTimeline(dateKey);
+  const plain = base.map((s) => ({ ...s }));
+  if (typeof namazEnabled !== "function" || !namazEnabled()) return plain;
+
+  const dayStart = 9 * 60;
+  const dayEnd = 23 * 60;
+
+  const events = namazDay(dateKey)
+    .filter((p) => p.id !== "fajr")
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      icon: p.icon,
+      atMin: p.at,
+      from: p.at - NAMAZ_PREP_MIN,
+      to: p.at + NAMAZ_PRAYER_MIN,
+      time: p.time,
+    }))
+    /* интересуют только те, что целиком попадают в рабочий день */
+    .filter((ev) => ev.from >= dayStart && ev.to <= dayEnd);
+
+  if (!events.length) return plain;
+
+  const out = [];
+  plain.forEach((slot) => {
+    let pieces = [{ from: minutesOf(slot.from), to: minutesOf(slot.to) }];
+    events.forEach((ev) => {
+      pieces = pieces.reduce((acc, piece) => acc.concat(cutInterval(piece, ev)), []);
+    });
+    const startMin = minutesOf(slot.from);
+    pieces.forEach((piece) => {
+      if (piece.to <= piece.from) return;
+      out.push({
+        ...slot,
+        from: namazHHMM(piece.from),
+        to: namazHHMM(piece.to),
+        cont: piece.from !== startMin,
+      });
+    });
+  });
+
+  events.forEach((ev) => {
+    out.push({
+      prayer: true,
+      id: ev.id,
+      from: namazHHMM(ev.from),
+      to: namazHHMM(ev.to),
+      prep: namazHHMM(ev.from),
+      at: namazHHMM(ev.atMin),
+      end: namazHHMM(ev.to),
+      icon: ev.icon,
+      label: ev.name,
+      atMin: ev.atMin,
+    });
+  });
+
+  out.sort((a, b) => minutesOf(a.from) - minutesOf(b.from));
+  return out;
+}
+
 /* Какой сейчас интервал. Возвращает {slot, index, left, next} или null вне расписания. */
 function slotNow(date, dateKey) {
   const timeline = currentTimeline(dateKey);
@@ -1131,6 +1285,25 @@ function slotNow(date, dateKey) {
     if (mins >= from && mins < to) {
       return { slot: timeline[i], index: i, left: to - mins, next: timeline[i + 1] || null };
     }
+  }
+  return null;
+}
+
+/* Что сейчас по графику с учётом намаза: либо обычный интервал, либо ступень намаза. */
+function momentNow(date, dateKey) {
+  const key = dateKey || keyOf(date);
+  const mins = date.getHours() * 60 + date.getMinutes();
+  const rows = dayTimeline(key);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const from = minutesOf(row.from);
+    const to = minutesOf(row.to);
+    if (mins < from || mins >= to) continue;
+    if (row.prayer) {
+      const phase = mins < row.atMin ? "prep" : mins < row.atMin + NAMAZ_PRAYER_MIN ? "prayer" : "done";
+      return { row, next: rows[i + 1] || null, left: to - mins, phase, index: i, rows };
+    }
+    return { row, next: rows[i + 1] || null, left: to - mins, phase: null, index: i, rows };
   }
   return null;
 }
@@ -1265,6 +1438,40 @@ function renderNow() {
         <span class="now-workout">${wt.title} · ${wt.tag}</span>
         <span class="now-note">Расписание начнётся в 09:00</span>
       </div>`;
+    return;
+  }
+
+  /* идёт ступень намаза — показываем её, а не рабочий блок */
+  const moment = isToday ? momentNow(now, nowKey) : null;
+  if (moment && moment.row.prayer) {
+    const r = moment.row;
+    const mark = namazDone(nowKey, r.id);
+    const phaseText =
+      moment.phase === "prep"
+        ? `Подготовка · намаз в ${r.at}`
+        : moment.phase === "prayer"
+          ? `Намаз идёт · до ${r.end}`
+          : `Намаз · вернись к делу в ${r.end}`;
+    root.className = "now-card now-namaz-card";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">${r.icon}</div>
+        <div class="now-text">
+          <div class="now-title">${r.label} · ${r.at}</div>
+          <div class="now-sub">${phaseText} · осталось ${fmtMinutes(moment.left)}</div>
+        </div>
+      </div>
+      <button class="now-done${mark ? " is-done" : ""}" ${mark ? "disabled" : ""}>${mark ? "✓ отмечен" : "Отметить намаз"}</button>
+      <div class="now-foot">
+        <span class="now-next">${moment.next ? `Дальше ${moment.next.from} · ${moment.next.label}` : "Дальше свободное время"}</span>
+        <span class="now-workout">${wt.title} · ${wt.tag}</span>
+      </div>`;
+    const btn = root.querySelector(".now-done");
+    if (btn && !mark) btn.addEventListener("click", () => toggleNamaz(nowKey, r.id));
     return;
   }
 
@@ -1404,10 +1611,10 @@ function renderNow() {
 function renderTimeline() {
   const root = document.getElementById("timeline");
   if (!root) return;
-  const timeline = currentTimeline(selectedDate);
+  const timeline = dayTimeline(selectedDate);
   const now = new Date();
   const nowKey = keyOf(now);
-  const active = selectedDate === nowKey ? slotNow(now, nowKey) : null;
+  const moment = selectedDate === nowKey ? momentNow(now, nowKey) : null;
   const target = targetLevelFor(selectedDate);
 
   root.innerHTML = "";
@@ -1437,26 +1644,155 @@ function renderTimeline() {
 
   root.appendChild(switcher);
 
-  timeline.forEach((slot, i) => {
-    const isNow = active && active.index === i;
-    const isPast = selectedDate === nowKey && active && i < active.index;
-    const row = el(
+  let prevMinutes = -1;
+
+  timeline.forEach((row, i) => {
+    const from = minutesOf(row.from);
+    const to = minutesOf(row.to);
+    const isNow = moment && moment.index === i;
+    const isPast = selectedDate === nowKey && from < now.getHours() * 60 + now.getMinutes();
+
+    /* ── намаз: три ступеньки ── */
+    if (row.prayer) {
+      const mark = (namazMarks(selectedDate) || {})[row.id];
+      const step = el(
+        "div",
+        "tl-namaz" + (isNow ? " is-now" : "") + (mark ? " is-done" : "") + (isPast && !isNow ? " is-past" : "")
+      );
+      step.dataset.namaz = row.id;
+      step.setAttribute("role", "button");
+      step.tabIndex = 0;
+      step.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleNamaz(selectedDate, row.id);
+        }
+      });
+
+      const prepMin = minutesOf(row.at) - minutesOf(row.prep);
+      step.innerHTML = `
+        <span class="tl-namaz-edge" aria-hidden="true"></span>
+        <span class="tl-namaz-glow" aria-hidden="true"></span>
+        <span class="tl-namaz-steps" aria-hidden="true">
+          <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
+        </span>
+        <span class="tl-namaz-main">
+          <span class="tl-namaz-title">${row.icon} ${row.label}</span>
+          <span class="tl-namaz-times">
+            <b>${row.at}</b>
+            <small>${row.prep} подготовка · ${row.until || ""}</small>
+          </span>
+        </span>
+        <span class="tl-namaz-scale">
+          <span>${row.prep}</span>
+          <span class="mid">${row.at}</span>
+          <span>${row.end}</span>
+        </span>
+        ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
+        ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
+
+      step.addEventListener("click", () => toggleNamaz(selectedDate, row.id));
+
+      /* свет живёт там, где мышка: источник света двигается за курсором */
+      const moveLight = (e) => {
+        const box = step.getBoundingClientRect();
+        const x = ((e.clientX - box.left) / box.width) * 100;
+        const y = ((e.clientY - box.top) / box.height) * 100;
+        step.style.setProperty("--mx", `${Math.max(0, Math.min(100, x))}%`);
+        step.style.setProperty("--my", `${Math.max(0, Math.min(100, y))}%`);
+      };
+      /* свет по странице: двигаем отдельный слой, только transform, без перерисовки */
+      const movePageLight = (e) => glowMove(e.clientX, e.clientY);
+      step.addEventListener("pointermove", (e) => {
+        moveLight(e);
+        movePageLight(e);
+        dropMove(e.clientX, e.clientY);
+      });
+      step.addEventListener("mouseenter", (e) => {
+        step.classList.add("is-lit");
+        moveLight(e);
+        glowOn(e.clientX, e.clientY);
+      });
+      step.addEventListener("mouseleave", () => {
+        step.classList.remove("is-lit");
+        step.style.removeProperty("--mx");
+        step.style.removeProperty("--my");
+        glowOff();
+      });
+      step.addEventListener("focus", () => glowOn());
+      step.addEventListener("blur", () => {
+        glowOff();
+        dropUnmount();
+      });
+      /* сам край блока становится волнистым: строим контур по его размеру */
+      requestAnimationFrame(() => {
+        /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
+           не пересчитывал рамку */
+        const w = step.offsetWidth || 320;
+        const h = step.offsetHeight || 54;
+        const holder = step.querySelector(".tl-namaz-edge");
+        if (!holder || w < 40) return;
+        const frames = namazWaveFrames(w, h);
+        holder.innerHTML = `
+          <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="namazEdgeGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#fff3cf"/>
+                <stop offset="0.45" stop-color="#ffcf7a"/>
+                <stop offset="1" stop-color="#ffb04d"/>
+              </linearGradient>
+            </defs>
+            <path class="edge-flame" d="${frames[0]}" pathLength="1000">
+              <animate attributeName="d" dur="2.1s" repeatCount="indefinite"
+                       calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
+            </path>
+            <path class="edge-core" d="${frames[0]}" pathLength="1000">
+              <animate attributeName="d" dur="2.1s" repeatCount="indefinite"
+                       calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
+            </path>
+          </svg>`;
+      });
+
+      if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
+      root.appendChild(step);
+      prevMinutes = to;
+      return;
+    }
+
+    /* ── обычный интервал ── */
+    const done = row.block ? levelOf(selectedDate, row.block) : null;
+    const line = el(
       "div",
-      "tl-row" + (isNow ? " is-now" : "") + (slot.tag === "глубоко" ? " strong" : "") + (isPast ? " is-past" : "")
+      "tl-row" +
+        (isNow ? " is-now" : "") +
+        (row.tag === "глубоко" ? " strong" : "") +
+        (isPast && !isNow ? " is-past" : "") +
+        (row.cont ? " is-cont" : "") +
+        (from - prevMinutes <= 1 && prevMinutes > 0 ? " joins" : "")
     );
-    const done = slot.block ? levelOf(selectedDate, slot.block) : null;
-    row.innerHTML = `
-      <span class="tl-time">${slot.from}<small>–${slot.to}</small></span>
-      <span class="tl-label">${slot.icon ? `<span class="tl-ico">${slot.icon}</span>` : ""}${slot.label}${
-        done ? ` <span class="tl-done">✓ ${LEVEL_TEXT[done]}</span>` : ""
-      }</span>
+    line.innerHTML = `
+      <span class="tl-time">${row.from}<small>–${row.to}</small></span>
+      <span class="tl-label">${row.icon ? `<span class="tl-ico">${row.icon}</span>` : ""}${row.label}${
+        row.cont ? ' <span class="tl-cont">продолжение</span>' : ""
+      }${done ? ` <span class="tl-done">✓ ${LEVEL_TEXT[done]}</span>` : ""}</span>
       ${isNow ? '<span class="tl-now">сейчас</span>' : ""}`;
-    root.appendChild(row);
+    root.appendChild(line);
+    prevMinutes = to;
   });
 
-  if (selectedDate === nowKey && active && active.slot.block && !hoursFor(nowKey, active.slot.block)) {
+  /* касание на телефоне тоже зажигает блок от точки нажатия */
+  root.querySelectorAll(".tl-namaz").forEach((node) => {
+    node.addEventListener("pointerdown", (e) => {
+      const box = node.getBoundingClientRect();
+      node.style.setProperty("--mx", `${((e.clientX - box.left) / box.width) * 100}%`);
+      node.style.setProperty("--my", `${((e.clientY - box.top) / box.height) * 100}%`);
+      glowMove(e.clientX, e.clientY);
+    });
+  });
+
+  if (moment && moment.row && !moment.row.prayer && moment.row.block && !hoursFor(nowKey, moment.row.block)) {
     /* подсказка под расписанием — что отметить прямо сейчас */
-    const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === active.slot.block).name}».`);
+    const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === moment.row.block).name}».`);
     root.appendChild(hint);
   }
 }
@@ -1844,6 +2180,117 @@ function namazTick() {
   });
 }
 setInterval(namazTick, 20000);
+
+/* ─────────── свет по странице от намаза ───────────
+   Источник света двигается за курсором без transition (иначе он «плывёт»),
+   а появление и исчезновение — только через transform: масштаб слоя.
+   Двигаем переменные в rAF, чтобы не дёргать стили на каждое событие. */
+var glowLayer = null;
+var glowPosNodes = [];
+var glowPoint = { x: 0, y: 0 };
+var glowRaf = 0;
+
+/* ─────────── капля-лупа над блоком намаза ───────────
+   Копия блока лежит в круглом слое 1:1 по мировым координатам; двигаем
+   только transform'ы (контейнер за курсором + копия на место блока).
+   Ни layout, ни чтения пикселей из-под слоя — на кадр только композиция. */
+var dropBox = null;
+var dropFollow = null;
+var dropCopy = null;
+var dropRect = null;
+var dropPoint = { x: 0, y: 0 };
+var dropRaf = 0;
+var DROP_SIZE = 260;
+
+function dropNodes() {
+  if (dropBox) return dropBox;
+  dropBox = document.getElementById("namazDrop");
+  if (!dropBox) return null;
+  dropFollow = dropBox.querySelector(".drop-follow");
+  dropCopy = document.getElementById("namazDropCopy");
+  return dropBox;
+}
+
+function dropMount(step) {
+  if (!dropNodes() || !dropCopy) return;
+  /* рамка без transform: блок при наведении подпрыгивает и растёт */
+  const r = step.getBoundingClientRect();
+  const bw = step.offsetWidth || r.width;
+  const bh = step.offsetHeight || r.height;
+  dropRect = {
+    left: r.left + (r.width - bw) / 2,
+    top: r.top + (r.height - bh) / 2,
+    width: bw,
+    height: bh,
+  };
+  const clone = step.cloneNode(true);
+  clone.removeAttribute("role");
+  clone.removeAttribute("tabindex");
+  clone.removeAttribute("data-namaz");
+  clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+  clone.className = "tl-namaz is-lit";
+  dropCopy.innerHTML = "";
+  dropCopy.appendChild(clone);
+  dropCopy.style.width = `${bw}px`;
+  dropCopy.style.height = `${bh}px`;
+  dropBox.classList.add("on");
+  document.body.classList.add("lens-on");
+}
+
+function dropUnmount() {
+  if (!dropBox) return;
+  dropBox.classList.remove("on");
+  document.body.classList.remove("lens-on");
+}
+
+function dropMove(x, y) {
+  dropPoint.x = x;
+  dropPoint.y = y;
+  if (dropRaf) return;
+  dropRaf = requestAnimationFrame(() => {
+    dropRaf = 0;
+    if (!dropFollow || !dropCopy || !dropRect) return;
+    dropFollow.style.setProperty("--drop-x", `${dropPoint.x}px`);
+    dropFollow.style.setProperty("--drop-y", `${dropPoint.y}px`);
+    /* копию ставим так, чтобы она совпала с настоящим блоком:
+       мировые координаты -> координаты капли (капля центрирована на курсоре) */
+    const dx = dropRect.left - (dropPoint.x - DROP_SIZE / 2);
+    const dy = dropRect.top - (dropPoint.y - DROP_SIZE / 2);
+    dropCopy.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+  });
+}
+
+function glowInit() {
+  glowLayer = document.getElementById("namazGlow");
+  if (!glowLayer) return;
+  glowPosNodes = [...glowLayer.querySelectorAll(".glow-pos")];
+}
+
+function glowMove(x, y) {
+  glowPoint.x = x;
+  glowPoint.y = y;
+  if (glowRaf) return;
+  glowRaf = requestAnimationFrame(() => {
+    glowRaf = 0;
+    if (!glowLayer) return;
+    glowLayer.style.setProperty("--page-px", `${glowPoint.x}px`);
+    glowLayer.style.setProperty("--page-py", `${glowPoint.y}px`);
+  });
+}
+
+function glowOn(x, y) {
+  if (!glowLayer) glowInit();
+  if (!glowLayer) return;
+  if (typeof x === "number") glowMove(x, y);
+  glowLayer.classList.add("on");
+}
+
+function glowOff() {
+  if (!glowLayer) return;
+  glowLayer.classList.remove("on");
+}
+
+glowInit();
 
 /* ─────────── расписание намаза из API ───────────
    Один раз при загрузке, дальше — при смене месяца/даты и по таймеру.
