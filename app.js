@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v25";
+const BUILD_LABEL = "сборка v26";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1701,32 +1701,25 @@ function renderTimeline() {
         step.style.setProperty("--mx", `${Math.max(0, Math.min(100, x))}%`);
         step.style.setProperty("--my", `${Math.max(0, Math.min(100, y))}%`);
       };
-      /* свет по странице: держим и проценты (для пятна), и пиксели (для лучей —
-         лучи живут в круглом слое, где проценты считаются от его размера) */
-      const movePageLight = (e) => {
-        document.body.style.setProperty("--page-mx", `${(e.clientX / window.innerWidth) * 100}%`);
-        document.body.style.setProperty("--page-my", `${(e.clientY / window.innerHeight) * 100}%`);
-        document.body.style.setProperty("--page-px", `${e.clientX}px`);
-        document.body.style.setProperty("--page-py", `${e.clientY}px`);
-      };
+      /* свет по странице: двигаем отдельный слой, только transform, без перерисовки */
+      const movePageLight = (e) => glowMove(e.clientX, e.clientY);
       step.addEventListener("pointermove", (e) => {
         moveLight(e);
         movePageLight(e);
       });
       step.addEventListener("mouseenter", (e) => {
-        document.body.classList.add("namaz-light");
         step.classList.add("is-lit");
         moveLight(e);
-        movePageLight(e);
+        glowOn(e.clientX, e.clientY);
       });
       step.addEventListener("mouseleave", () => {
-        document.body.classList.remove("namaz-light");
         step.classList.remove("is-lit");
         step.style.removeProperty("--mx");
         step.style.removeProperty("--my");
+        glowOff();
       });
-      step.addEventListener("focus", () => document.body.classList.add("namaz-light"));
-      step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
+      step.addEventListener("focus", () => glowOn());
+      step.addEventListener("blur", () => glowOff());
       /* сам край блока становится волнистым: строим контур по его размеру */
       requestAnimationFrame(() => {
         /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
@@ -1789,10 +1782,7 @@ function renderTimeline() {
       const box = node.getBoundingClientRect();
       node.style.setProperty("--mx", `${((e.clientX - box.left) / box.width) * 100}%`);
       node.style.setProperty("--my", `${((e.clientY - box.top) / box.height) * 100}%`);
-      document.body.style.setProperty("--page-px", `${e.clientX}px`);
-      document.body.style.setProperty("--page-py", `${e.clientY}px`);
-      document.body.style.setProperty("--page-mx", `${(e.clientX / window.innerWidth) * 100}%`);
-      document.body.style.setProperty("--page-my", `${(e.clientY / window.innerHeight) * 100}%`);
+      glowMove(e.clientX, e.clientY);
     });
   });
 
@@ -2186,6 +2176,47 @@ function namazTick() {
   });
 }
 setInterval(namazTick, 20000);
+
+/* ─────────── свет по странице от намаза ───────────
+   Источник света двигается за курсором без transition (иначе он «плывёт»),
+   а появление и исчезновение — только через transform: масштаб слоя.
+   Двигаем переменные в rAF, чтобы не дёргать стили на каждое событие. */
+var glowLayer = null;
+var glowPosNodes = [];
+var glowPoint = { x: 0, y: 0 };
+var glowRaf = 0;
+
+function glowInit() {
+  glowLayer = document.getElementById("namazGlow");
+  if (!glowLayer) return;
+  glowPosNodes = [...glowLayer.querySelectorAll(".glow-pos")];
+}
+
+function glowMove(x, y) {
+  glowPoint.x = x;
+  glowPoint.y = y;
+  if (glowRaf) return;
+  glowRaf = requestAnimationFrame(() => {
+    glowRaf = 0;
+    if (!glowLayer) return;
+    glowLayer.style.setProperty("--page-px", `${glowPoint.x}px`);
+    glowLayer.style.setProperty("--page-py", `${glowPoint.y}px`);
+  });
+}
+
+function glowOn(x, y) {
+  if (!glowLayer) glowInit();
+  if (!glowLayer) return;
+  if (typeof x === "number") glowMove(x, y);
+  glowLayer.classList.add("on");
+}
+
+function glowOff() {
+  if (!glowLayer) return;
+  glowLayer.classList.remove("on");
+}
+
+glowInit();
 
 /* ─────────── расписание намаза из API ───────────
    Один раз при загрузке, дальше — при смене месяца/даты и по таймеру.

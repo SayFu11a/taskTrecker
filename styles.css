@@ -1,10 +1,3 @@
-/* угол поворота лучей: без @property анимация угла не работает */
-@property --ray-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
 :root {
   --bg: #08090d;
   --bg-2: #0d0f16;
@@ -1838,89 +1831,102 @@ input::placeholder { color: #626880; }
   text-transform: lowercase;
 }
 
-/* ─────────── свет на всю страницу: большое пятно + лучи ─────────── */
-/* слой 1: широкое тёплое пятно, идёт за курсором */
-body::after {
-  content: "";
+/* ─────────── свет на всю страницу ───────────
+   Раньше здесь были body::before/::after с градиентами, которые
+   пересчитывались на каждое движение мыши, плюс blur и mix-blend-mode —
+   из-за этого анимация проседала по кадрам, а слой «плыл» за курсором
+   (transition стоял и на перемещении).
+   Теперь всё анимируется только transform'ом: браузеру остаётся
+   двигать готовые слои, без перерисовки градиентов. */
+
+.namaz-glow-layer {
   position: fixed;
   inset: 0;
-  pointer-events: none;
   z-index: 40;
+  pointer-events: none;
   opacity: 0;
-  transform: scale(1.6);
-  transform-origin: var(--page-mx, 50%) var(--page-my, 35%);
-  transition: opacity 0.55s ease, transform 1.2s cubic-bezier(0.16, 1, 0.3, 1);
-  background:
-    radial-gradient(
-      900px circle at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 214, 140, 0.16),
-      rgba(255, 190, 90, 0.07) 32%,
-      rgba(255, 170, 55, 0.03) 55%,
-      transparent 76%
-    ),
-    radial-gradient(
-      420px circle at var(--page-mx, 50%) var(--page-my, 35%),
-      rgba(255, 240, 205, 0.12),
-      transparent 70%
-    );
-  mix-blend-mode: screen;
+  transition: opacity 0.35s ease;
 }
-body.namaz-light::after { opacity: 1; transform: scale(1); }
+.namaz-glow-layer.on { opacity: 1; }
 
-/* слой 2: лучи света. Слой — круг (border-radius: 50%), выходящий за экран.
-   Растёт и сжимается из точки курсора, поэтому при появлении/исчезновении
-   не видно квадратных границ — только круг. */
-body::before {
-  content: "";
-  position: fixed;
+/* позиция следует за курсором мгновенно, без transition */
+.glow-pos {
+  position: absolute;
   left: 0;
   top: 0;
-  /* диаметр с запасом, чтобы круг закрывал экран из любого угла */
-  width: 300vmax;
-  height: 300vmax;
-  margin-left: -150vmax;
-  margin-top: -150vmax;
-  transform: translate(var(--page-px, 50vw), var(--page-py, 40vh)) scale(0.2);
+  transform: translate3d(var(--page-px, 50vw), var(--page-py, 40vh), 0);
+  will-change: transform;
+}
+
+/* ── тёплое пятно ── */
+.spot-disc {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1800px;
+  height: 1800px;
+  margin: -900px 0 0 -900px;
   border-radius: 50%;
-  pointer-events: none;
-  z-index: 41;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 216, 148, 0.16),
+    rgba(255, 194, 96, 0.08) 34%,
+    rgba(255, 172, 56, 0.03) 58%,
+    transparent 78%
+  );
+  transform: scale(0.8);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+.namaz-glow-layer.on .spot-disc { transform: scale(1); }
+
+/* ── лучи ── */
+.rays-scale {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  /* круг появляется и сужается целиком: только масштаб, никакой перерисовки */
+  transform: scale(0.12);
   opacity: 0;
-  transition: opacity 0.45s ease, transform 1.1s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.75s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease;
+  will-change: transform, opacity;
+}
+.namaz-glow-layer.on .rays-scale { transform: scale(1); opacity: 1; }
+
+.rays-disc {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 240vmax;
+  height: 240vmax;
+  margin: -120vmax 0 0 -120vmax;
+  border-radius: 50%;
   background:
+    /* мягкое затухание к краю круга — вместо маски (маска дорогая) */
+    radial-gradient(
+      closest-side,
+      transparent 18%,
+      rgba(8, 9, 13, 0.35) 55%,
+      rgba(8, 9, 13, 0.95) 82%,
+      #08090d 100%
+    ),
     repeating-conic-gradient(
-      from var(--ray-angle, 0deg) at 50% 50%,
-      rgba(255, 224, 160, 0.14) 0deg 2.2deg,
+      rgba(255, 224, 160, 0.16) 0deg 2.2deg,
       rgba(255, 224, 160, 0) 2.2deg 13deg
     ),
     repeating-conic-gradient(
-      from calc(var(--ray-angle, 0deg) + 7deg) at 50% 50%,
-      rgba(255, 196, 92, 0.09) 0deg 0.9deg,
+      rgba(255, 196, 92, 0.10) 0deg 0.9deg,
       rgba(255, 196, 92, 0) 0.9deg 21deg
     );
-  /* мягкий край круга: ни квадрата, ни резкой границы */
-  -webkit-mask-image: radial-gradient(
-    closest-side,
-    transparent 4%,
-    #000 22%,
-    rgba(0, 0, 0, 0.85) 70%,
-    transparent 100%
-  );
-  mask-image: radial-gradient(
-    closest-side,
-    transparent 4%,
-    #000 22%,
-    rgba(0, 0, 0, 0.85) 70%,
-    transparent 100%
-  );
-  mix-blend-mode: screen;
-  filter: blur(0.8px);
-  animation: rays-turn 55s linear infinite;
+  animation: rays-turn 60s linear infinite;
+  will-change: transform;
 }
-body.namaz-light::before { opacity: 1; transform: translate(var(--page-px, 50vw), var(--page-py, 40vh)) scale(1); }
 
 @keyframes rays-turn {
-  from { --ray-angle: 0deg; }
-  to { --ray-angle: 360deg; }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
