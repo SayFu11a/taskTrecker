@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v10";
+const VERSION = "vp-tracker-v11";
 const SHELL = [
   "./",
   "./index.html",

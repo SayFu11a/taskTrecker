@@ -1,24 +1,40 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "rm -rf public && mkdir -p public && cp index.html styles.css app.js data.js sound.js achievements.js sync.js push.js sw.js manifest.json icon-192.png icon-512.png icon-maskable-512.png public/ && ls -l public",
+  "buildCommand": "rm -rf public && mkdir -p public && cp index.html styles.css app.js data.js namaz.js sound.js achievements.js sync.js push.js sw.js manifest.json icon-192.png icon-512.png icon-maskable-512.png public/",
   "installCommand": null,
   "outputDirectory": ".",
   "headers": [
     {
       "source": "/sw.js",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
-        { "key": "Service-Worker-Allowed", "value": "/" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        }
       ]
     },
     {
       "source": "/manifest.json",
-      "headers": [{ "key": "Content-Type", "value": "application/manifest+json" }]
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/manifest+json"
+        }
+      ]
     },
     {
       "source": "/(.*)",
-      "headers": [{ "key": "X-Content-Type-Options", "value": "nosniff" }]
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        }
+      ]
     }
   ]
 }

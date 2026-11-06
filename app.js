@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v10";
+const BUILD_LABEL = "сборка v11";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -747,6 +747,17 @@ function toggleNamaz(dateKey, id) {
   if (day[id]) toast(`${NAMAZ_NAMES[id]} отмечен.`);
 }
 
+function namazSourceText(times, dateKey) {
+  if (times.api) {
+    const month = NAMAZ_API_CACHE[(dateKey || todayKey()).slice(0, 7)] || NAMAZ_API_CACHE[todayKey().slice(0, 7)];
+    const when = month && month.savedAt ? new Date(month.savedAt) : null;
+    const stamp = when ? `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}` : "";
+    return `Муфтият ЧР, официальное расписание с assolat.ru${stamp ? ` · обновлено ${stamp}` : ""}`;
+  }
+  if (times.official) return "Муфтият ЧР, встроенные дни расписания (API недоступен)";
+  return "расчёт по солнцу — официальных данных на этот год нет";
+}
+
 function namazCount(dateKey) {
   return NAMAZ_IDS.filter((id) => namazDone(dateKey, id)).length;
 }
@@ -769,6 +780,15 @@ function setNamazSkipToday(on) {
     /* ignore */
   }
 }
+
+/* при загрузке и по таймеру подтягиваем официальное расписание из API */
+function namazBootSync() {
+  namazSync(selectedDate);
+}
+setTimeout(namazBootSync, 500);
+setInterval(() => {
+  if (!document.hidden) namazSync(todayKey());
+}, 6 * 60 * 60 * 1000);
 
 function renderNamaz() {
   const root = document.getElementById("prayerCard");
@@ -795,7 +815,7 @@ function renderNamaz() {
   head.innerHTML = `
     <div>
       <div class="prayer-title">🕌 Намаз · ${NAMAZ_CITY.name}</div>
-      <div class="prayer-sub">${times.official ? "Муфтият ЧР, аср — одинарная тень" : "расчёт по солнцу, официальных данных на этот год нет"}${dateKey !== nowKey ? ` · ${DATE_FMT.format(dateOf(dateKey))}` : ""}</div>
+      <div class="prayer-sub">${namazSourceText(times, dateKey)}${dateKey !== nowKey ? ` · ${DATE_FMT.format(dateOf(dateKey))}` : ""}</div>
     </div>
     <div class="prayer-count"><b>${done}</b>/5</div>`;
   root.appendChild(head);
@@ -1574,6 +1594,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 /* ─────────────── рендер ─────────────── */
 
 function renderAll() {
+  if (typeof namazSync === "function" && namazEnabled()) namazSync(selectedDate);
   if (typeof renderNamaz === "function") renderNamaz();
   renderModes();
   renderBlocks();
@@ -1687,6 +1708,31 @@ function namazTick() {
 }
 setInterval(namazTick, 20000);
 
+/* ─────────── расписание намаза из API ───────────
+   Один раз при загрузке, дальше — при смене месяца/даты и по таймеру.
+   Всё кешируется в localStorage, поэтому офлайн ничего не ломается. */
+var namazFetching = false;
+
+function namazSync(dateKey) {
+  if (typeof namazRefresh !== "function") return;
+  if (!namazEnabled()) return;
+  if (namazFetching) return;
+  /* месяц уже в кеше и свежий — сеть не дёргаем */
+  if (typeof namazApiFresh === "function" && namazApiFresh((dateKey || todayKey()).slice(0, 7))) return;
+  namazFetching = true;
+  namazRefresh(dateKey || todayKey(), {
+    onUpdate: () => {
+      renderNamaz();
+      renderNow();
+      renderTimeline();
+    },
+  })
+    .catch(() => null)
+    .then(() => {
+      namazFetching = false;
+    });
+}
+
 /* плашка «Сейчас» живёт сама: раз в 30 секунд и при возврате во вкладку */
 setInterval(() => {
   renderNow();
@@ -1699,6 +1745,7 @@ setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     renderNow();
+    if (typeof namazSync === "function") namazSync(selectedDate);
     if (selectedDate !== todayKey()) return;
     renderTimeline();
   }
@@ -1741,6 +1788,7 @@ function renderNamazBox() {
     </div>
     <div class="sfx-actions">
       <button class="ghost-btn acc-btn" id="namazToggle">${on ? "Выключить" : "Включить"}</button>
+      ${on ? `<button class="ghost-btn acc-btn" id="namazRefreshBtn">Обновить из API</button>` : ""}
       ${on ? `<button class="ghost-btn acc-btn" id="namazSkipBtn">${skipped ? "Вернуть намаз на сегодня" : "Пропустить сегодня"}</button>` : ""}
     </div>`;
 
@@ -1751,6 +1799,20 @@ function renderNamazBox() {
     renderNamaz();
     renderNow();
   });
+
+  const refreshBtn = document.getElementById("namazRefreshBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "Обновляю…";
+      const ok = await namazRefresh(selectedDate, { force: true });
+      renderNamazBox();
+      renderNamaz();
+      renderNow();
+      renderTimeline();
+      toast(ok ? "Расписание обновлено из API" : "API недоступен — остаёмся на кеше");
+    });
+  }
 
   const skipBtn = document.getElementById("namazSkipBtn");
   if (skipBtn) {

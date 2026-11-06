@@ -16,8 +16,13 @@
    - Восход считается по солнцу с горизонтом −1,8° — специально подобрано
      под опубликованный восход Муфтията (средняя ошибка 0,47 мин, максимум 1 мин
      на том же ноябре). Нужен, потому что восход закрывает время фаджра.
-   - Для 2027+ официальных данных нет → расчёт по солнцу (углы ДУМ РФ 16/15,
-     аср по одинарной тени) и честная пометка «расчётное» в интерфейсе. */
+   - Главный источник — открытый JSON ДУМ ЧР: https://assolat.ru/api/namaz/{год}/{месяц}
+     (и /today). Он отдаёт официальные времена на каждый день, включая восход,
+     без всяких формул. Данные грузятся при запуске сайта, кладутся в
+     localStorage и отдаются из кеша, пока свежие или пока нет сети.
+   - Если API недоступен (офлайн, старый год, сбой) — работают:
+     опубликованные дни 2026 (NAMAZ_ANCHORS) с интерполяцией,
+     а для 2027+ расчёт по солнцу с честной пометкой «расчётное». */
 
 const NAMAZ_CITY = {
   name: "Грозный",
@@ -149,12 +154,183 @@ function namazHHMM(min) {
   return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
 }
 
+/* ─────────────── источник данных: API ДУМ ЧР ─────────────── */
+
+const NAMAZ_API = "https://assolat.ru/api/namaz";
+const NAMAZ_CACHE_KEY = "vp-tracker-namaz-api";
+/* официальное расписание меняется редко: месяц считаем свежим 12 часов */
+const NAMAZ_CACHE_TTL = 12 * 60 * 60 * 1000;
+
+/* { "2026-11": { savedAt, times: { "2026-11-06": {...} } } } */
+var NAMAZ_API_CACHE = {};
+/* месяцы, которых в API нет (например 2027) — чтобы не дёргать их каждые 5 минут */
+var NAMAZ_API_FAILED = {};
+var NAMAZ_FAIL_TTL = 6 * 60 * 60 * 1000;
+var NAMAZ_FAIL_KEY = "vp-tracker-namaz-api-failed";
+
+function namazLoadFailed() {
+  try {
+    const raw = localStorage.getItem(NAMAZ_FAIL_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    NAMAZ_API_FAILED = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    NAMAZ_API_FAILED = {};
+  }
+}
+
+function namazSaveFailed() {
+  try {
+    localStorage.setItem(NAMAZ_FAIL_KEY, JSON.stringify(NAMAZ_API_FAILED));
+  } catch {
+    /* ничего */
+  }
+}
+
+function namazRecentlyFailed(monthKey) {
+  const at = NAMAZ_API_FAILED[monthKey];
+  return Boolean(at && Date.now() - at < NAMAZ_FAIL_TTL);
+}
+
+function namazLoadCache() {
+  try {
+    const raw = localStorage.getItem(NAMAZ_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    NAMAZ_API_CACHE = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    NAMAZ_API_CACHE = {};
+  }
+  return NAMAZ_API_CACHE;
+}
+
+function namazSaveCache() {
+  try {
+    localStorage.setItem(NAMAZ_CACHE_KEY, JSON.stringify(NAMAZ_API_CACHE));
+  } catch {
+    /* приватный режим / переполнение — живём на встроенных данных */
+  }
+}
+
+function namazApiTimes(dateKey) {
+  const month = (NAMAZ_API_CACHE[dateKey.slice(0, 7)] || {}).times || {};
+  return month[dateKey] || null;
+}
+
+function namazApiFresh(monthKey) {
+  const row = NAMAZ_API_CACHE[monthKey];
+  return Boolean(row && row.savedAt && Date.now() - row.savedAt < NAMAZ_CACHE_TTL);
+}
+
+function namazNormTime(value) {
+  if (!value) return null;
+  const m = String(value).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!(h >= 0 && h < 24 && min >= 0 && min < 60)) return null;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/* Один месяц из API. Возвращает true, если что-то обновили. */
+async function namazFetchMonth(monthKey, force) {
+  const [y, m] = monthKey.split("-").map(Number);
+  if (namazApiFresh(monthKey) && !force) return false;
+  if (!force && namazRecentlyFailed(monthKey)) return false;
+
+  let res;
+  try {
+    res = await fetch(`${NAMAZ_API}/${y}/${m}`, { cache: "no-store" });
+  } catch (e) {
+    NAMAZ_API_FAILED[monthKey] = Date.now();
+    namazSaveFailed();
+    throw e;
+  }
+  if (!res.ok) {
+    NAMAZ_API_FAILED[monthKey] = Date.now();
+    namazSaveFailed();
+    throw new Error("HTTP " + res.status);
+  }
+  const json = await res.json();
+  const rows = Array.isArray(json && json.data) ? json.data : [];
+  if (!rows.length) throw new Error("пустой ответ");
+
+  const times = {};
+  rows.forEach((r) => {
+    const date = String(r.date || "").slice(0, 10);
+    /* защита от чужого ответа: дни должны быть из запрошенного месяца */
+    if (!date.startsWith(monthKey + "-")) return;
+    const fajr = namazNormTime(r.fajr);
+    const dhuhr = namazNormTime(r.dhuhr);
+    const asr = namazNormTime(r.asr);
+    const maghrib = namazNormTime(r.maghrib);
+    const isha = namazNormTime(r.isha);
+    if (!date || !fajr || !dhuhr || !asr || !maghrib || !isha) return;
+    times[date] = {
+      fajr,
+      dhuhr,
+      asr,
+      maghrib,
+      isha,
+      sunrise: namazNormTime(r.sunrise),
+      dhuha: namazNormTime(r.dhuha),
+      source: "Муфтият ЧР",
+      api: true,
+    };
+  });
+
+  if (!Object.keys(times).length) throw new Error("нет валидных дней");
+  NAMAZ_API_CACHE[monthKey] = { savedAt: Date.now(), times };
+  delete NAMAZ_API_FAILED[monthKey];
+  namazSaveCache();
+  namazSaveFailed();
+  return true;
+}
+
+/* Подтянуть месяцы вокруг todayKey (по умолчанию — текущий и следующий).
+   Никогда не бросает: офлайн — просто остаёмся на кеше и встроенных данных. */
+async function namazRefresh(dateKey, opts) {
+  const options = opts || {};
+  const months = [dateKey.slice(0, 7), namazNextKey(dateKey).slice(0, 7)];
+  const unique = [...new Set(months)];
+  let updated = false;
+
+  for (const monthKey of unique) {
+    try {
+      const ok = await namazFetchMonth(monthKey, options.force);
+      if (ok) {
+        updated = true;
+        /* обновляем сразу после каждого месяца — не ждём следующий */
+        if (typeof options.onUpdate === "function") options.onUpdate(monthKey);
+      }
+    } catch (e) {
+      /* тихо: сеть может быть выключена, а расписание уже есть в кеше */
+    }
+  }
+  return updated;
+}
+
 function namazHasOfficial(dateKey) {
   return Boolean(NAMAZ_ANCHORS[dateKey.slice(0, 7)]);
 }
 
-/* Времена намаза на дату YYYY-MM-DD. */
+/* Времена намаза на дату YYYY-MM-DD.
+   Приоритет: API ДУМ ЧР → встроенные официальные дни → расчёт по солнцу. */
 function namazTimes(dateKey) {
+  const api = namazApiTimes(dateKey);
+  if (api) {
+    return {
+      fajr: api.fajr,
+      dhuhr: api.dhuhr,
+      asr: api.asr,
+      maghrib: api.maghrib,
+      isha: api.isha,
+      sunrise: api.sunrise || namazSunrise(dateKey),
+      dhuha: api.dhuha || null,
+      official: true,
+      api: true,
+      source: "Муфтият ЧР (API)",
+    };
+  }
+
   const anchors = NAMAZ_ANCHORS[dateKey.slice(0, 7)];
   const sunrise = namazSunrise(dateKey);
 
@@ -302,4 +478,10 @@ function namazNow(dateKey, nowMin) {
   }
   const upcoming = day.find((p) => p.at > nowMin);
   return { current: null, next: upcoming || null, day };
+}
+
+/* кеш из прошлого запуска нужен до первого рендера */
+if (typeof localStorage !== "undefined") {
+  namazLoadCache();
+  namazLoadFailed();
 }
