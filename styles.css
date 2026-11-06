@@ -1819,6 +1819,96 @@ input::placeholder { color: #626880; }
 }
 .tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 3; color: #a9f0dc; font-weight: 700; }
 
+/* ─────────── капля жидкости ───────────
+   Ничего не читаем из-под слоя (никакого backdrop-filter) и не трогаем layout:
+   1) .drop-follow едет за курсором — только translate3d, GPU;
+   2) внутри круга лежит 1:1 копия блока, сдвинутая так, что её координаты
+      совпадают с настоящим блоком -> в капле виден тот же текст на том же месте;
+   3) feDisplacementMap тянет и закручивает содержимое у кромки круга,
+      поэтому стык копии с фоном не виден: искажение нулевое в центре
+      и плавно уходит в ноль на самом краю.
+   Капля включается только пока мышь над блоком. */
+
+.namaz-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 46;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.namaz-drop.on { opacity: 1; }
+/* фильтр включаем только на время показа: в покое страница его не считает */
+body:not(.lens-on) .drop-warp { filter: none !important; }
+
+.drop-follow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform: translate3d(var(--drop-x, -999px), var(--drop-y, -999px), 0);
+  will-change: transform;
+}
+
+.drop-glass {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 260px;
+  height: 260px;
+  margin: -130px 0 0 -130px;
+  border-radius: 50%;
+  overflow: hidden;
+  transform: scale(0.6);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+.namaz-drop.on .drop-glass { transform: scale(1); }
+
+/* копия блока: размеры и позиция — в мировых координатах, как у оригинала */
+.drop-copy {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+}
+.drop-copy .tl-namaz {
+  margin: 0;
+  transform: none !important;
+  animation: none;
+  cursor: default;
+  /* фон 1:1 с оригиналом, но плотный: иначе сквозь копию просвечивал бы текст */
+  background:
+    linear-gradient(90deg, rgba(255, 199, 102, 0.14), rgba(255, 199, 102, 0.03) 60%),
+    #16130d;
+}
+.drop-copy .tl-namaz-core { transform: none !important; }
+/* в копии не нужны ни анимация края, ни приглушение: она просто «стекло» */
+.drop-copy .tl-namaz-edge { display: none; }
+
+.drop-warp {
+  position: absolute;
+  inset: 0;
+  filter: url(#namazDrop);
+  will-change: filter;
+}
+
+/* кромка капли: тонкий блик сверху-слева и тень снизу-справа */
+.drop-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 250, 236, 0.5), rgba(255, 244, 214, 0.12) 26%, transparent 46%),
+    radial-gradient(circle at 70% 76%, rgba(0, 0, 0, 0.28), transparent 52%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 236, 200, 0.34),
+    inset 0 -10px 22px rgba(120, 78, 26, 0.22),
+    0 0 26px rgba(255, 200, 110, 0.16);
+}
+
 /* кусок обычного блока, который начинается после намаза */
 .tl-row.is-cont { opacity: 0.92; background: rgba(255, 255, 255, 0.02); }
 .tl-row.joins { margin-top: -6px; border-top-left-radius: 6px; border-top-right-radius: 6px; }

@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v27";
+const BUILD_LABEL = "сборка v31";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1706,6 +1706,7 @@ function renderTimeline() {
       step.addEventListener("pointermove", (e) => {
         moveLight(e);
         movePageLight(e);
+        dropMove(e.clientX, e.clientY);
       });
       step.addEventListener("mouseenter", (e) => {
         step.classList.add("is-lit");
@@ -1719,7 +1720,10 @@ function renderTimeline() {
         glowOff();
       });
       step.addEventListener("focus", () => glowOn());
-      step.addEventListener("blur", () => glowOff());
+      step.addEventListener("blur", () => {
+        glowOff();
+        dropUnmount();
+      });
       /* сам край блока становится волнистым: строим контур по его размеру */
       requestAnimationFrame(() => {
         /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
@@ -2185,6 +2189,76 @@ var glowLayer = null;
 var glowPosNodes = [];
 var glowPoint = { x: 0, y: 0 };
 var glowRaf = 0;
+
+/* ─────────── капля-лупа над блоком намаза ───────────
+   Копия блока лежит в круглом слое 1:1 по мировым координатам; двигаем
+   только transform'ы (контейнер за курсором + копия на место блока).
+   Ни layout, ни чтения пикселей из-под слоя — на кадр только композиция. */
+var dropBox = null;
+var dropFollow = null;
+var dropCopy = null;
+var dropRect = null;
+var dropPoint = { x: 0, y: 0 };
+var dropRaf = 0;
+var DROP_SIZE = 260;
+
+function dropNodes() {
+  if (dropBox) return dropBox;
+  dropBox = document.getElementById("namazDrop");
+  if (!dropBox) return null;
+  dropFollow = dropBox.querySelector(".drop-follow");
+  dropCopy = document.getElementById("namazDropCopy");
+  return dropBox;
+}
+
+function dropMount(step) {
+  if (!dropNodes() || !dropCopy) return;
+  /* рамка без transform: блок при наведении подпрыгивает и растёт */
+  const r = step.getBoundingClientRect();
+  const bw = step.offsetWidth || r.width;
+  const bh = step.offsetHeight || r.height;
+  dropRect = {
+    left: r.left + (r.width - bw) / 2,
+    top: r.top + (r.height - bh) / 2,
+    width: bw,
+    height: bh,
+  };
+  const clone = step.cloneNode(true);
+  clone.removeAttribute("role");
+  clone.removeAttribute("tabindex");
+  clone.removeAttribute("data-namaz");
+  clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+  clone.className = "tl-namaz is-lit";
+  dropCopy.innerHTML = "";
+  dropCopy.appendChild(clone);
+  dropCopy.style.width = `${bw}px`;
+  dropCopy.style.height = `${bh}px`;
+  dropBox.classList.add("on");
+  document.body.classList.add("lens-on");
+}
+
+function dropUnmount() {
+  if (!dropBox) return;
+  dropBox.classList.remove("on");
+  document.body.classList.remove("lens-on");
+}
+
+function dropMove(x, y) {
+  dropPoint.x = x;
+  dropPoint.y = y;
+  if (dropRaf) return;
+  dropRaf = requestAnimationFrame(() => {
+    dropRaf = 0;
+    if (!dropFollow || !dropCopy || !dropRect) return;
+    dropFollow.style.setProperty("--drop-x", `${dropPoint.x}px`);
+    dropFollow.style.setProperty("--drop-y", `${dropPoint.y}px`);
+    /* копию ставим так, чтобы она совпала с настоящим блоком:
+       мировые координаты -> координаты капли (капля центрирована на курсоре) */
+    const dx = dropRect.left - (dropPoint.x - DROP_SIZE / 2);
+    const dy = dropRect.top - (dropPoint.y - DROP_SIZE / 2);
+    dropCopy.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+  });
+}
 
 function glowInit() {
   glowLayer = document.getElementById("namazGlow");
