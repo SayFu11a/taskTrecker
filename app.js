@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v19";
+const BUILD_LABEL = "сборка v20";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1683,10 +1683,6 @@ function renderTimeline() {
          чтобы текст всегда оставался читаемым */
       step.innerHTML = `
         <span class="tl-namaz-edge" aria-hidden="true"></span>
-        <span class="tl-edge-flame top" aria-hidden="true"></span>
-        <span class="tl-edge-flame bottom" aria-hidden="true"></span>
-        <span class="tl-edge-flame left" aria-hidden="true"></span>
-        <span class="tl-edge-flame right" aria-hidden="true"></span>
         <span class="tl-namaz-glow" aria-hidden="true"></span>
         <span class="tl-namaz-inner">
           <span class="tl-namaz-steps" aria-hidden="true">
@@ -1707,15 +1703,6 @@ function renderTimeline() {
         </span>
         ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
         ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
-
-      /* перья пламени: тайловый фон + бег по краю */
-      step.querySelectorAll(".tl-edge-flame").forEach((flame, k) => {
-        flame.style.backgroundImage = NAMAZ_FLAME_TILE;
-        flame.style.backgroundSize = flame.classList.contains("left") || flame.classList.contains("right")
-          ? "12px 64px"
-          : "64px 16px";
-        flame.style.animation = `flame-run ${1.6 + k * 0.35}s linear infinite`;
-      });
 
       step.addEventListener("click", () => toggleNamaz(selectedDate, row.id));
 
@@ -1753,9 +1740,9 @@ function renderTimeline() {
       /* волнистая рамка: строим после вставки в DOM, когда известны размеры */
       const buildEdge = () => {
         const box = step.getBoundingClientRect();
-        /* рамка живёт в контейнере с inset: -6px, поэтому добавляем запас */
-        const w = Math.round(box.width) + 12 || 332;
-        const h = Math.round(box.height) + 12 || 68;
+        /* рамка живёт в контейнере с inset: -5px, поэтому добавляем запас */
+        const w = Math.round(box.width) + 10 || 330;
+        const h = Math.round(box.height) + 10 || 66;
         const seed = (row.id || "p").length + h;
         const radius = parseFloat(getComputedStyle(step).borderRadius) || 16;
         const d = namazWavePath(w, h, seed, radius);
@@ -1771,7 +1758,6 @@ function renderTimeline() {
                 <stop offset="1" stop-color="#ffe6a8"/>
               </linearGradient>
             </defs>
-            <path class="edge-glow" d="${d}"/>
             <path class="edge-core" d="${d}"/>
           </svg>`;
       };

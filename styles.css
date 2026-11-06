@@ -1590,10 +1590,11 @@ input::placeholder { color: #626880; }
 .night-row.done .night-time { color: var(--accent-2); }
 .night-note { font-size: 11px; color: var(--muted); }
 
-/* ─────────── намаз в расписании: стиль и свет как в v15, но край живой ─────────── */
-/* --mx/--my — координаты курсора внутри блока (ставит app.js).
-   Слои снизу вверх: glow (свет за курсором) → inner (контент) →
-   волны (плавающий край) → кромка (горящий периметр). */
+/* ─────────── намаз в расписании ───────────
+   База — ровно как в v15: тот же блок, тот же свет за курсором, та же
+   горящая кромка и то же разгорание при наведении.
+   Добавлено только одно: волнистая плавающая линия вокруг блока
+   (та, что понравилась в v18) — она и есть «живой край», рамки нет. */
 
 .tl-namaz {
   --mx: 50%;
@@ -1603,14 +1604,12 @@ input::placeholder { color: #626880; }
   margin: 8px 2px;
   padding: 11px 13px 11px 10px;
   border-radius: 12px;
-  /* статичный прямоугольный контур убран: единственный край — плавающие волны */
   border: none;
   background:
     linear-gradient(90deg, rgba(255, 199, 102, 0.14), rgba(255, 199, 102, 0.03) 60%),
-    rgba(24, 20, 12, 0.62);
+    rgba(24, 20, 12, 0.6);
   color: #ffe6b8;
   cursor: pointer;
-  overflow: visible;
   font: inherit;
   text-align: left;
   isolation: isolate;
@@ -1626,7 +1625,7 @@ input::placeholder { color: #626880; }
   50% { box-shadow: 0 0 0 1px rgba(255, 199, 102, 0.18) inset, 0 0 28px rgba(255, 183, 77, 0.24); }
 }
 
-/* контент всегда поверх света */
+/* контент — сетка как в v15, но отдельным слоем поверх света */
 .tl-namaz-inner {
   position: relative;
   z-index: 5;
@@ -1637,7 +1636,7 @@ input::placeholder { color: #626880; }
   pointer-events: none;
 }
 
-/* свет внутри блока, ходит за мышкой — как в v15 */
+/* свет, который ходит за мышкой внутри блока (v15) */
 .tl-namaz-glow {
   position: absolute;
   inset: 0;
@@ -1657,7 +1656,7 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover .tl-namaz-glow,
 .tl-namaz.is-lit .tl-namaz-glow { opacity: 1; }
 
-/* кромка: горящий периметр от курсора — как в v15 */
+/* края блока горят сильнее всего (v15) */
 .tl-namaz::before {
   content: "";
   position: absolute;
@@ -1688,7 +1687,7 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover::before,
 .tl-namaz.is-lit::before { opacity: 1; }
 
-/* внутренний жар + общий свет — как в v15 */
+/* внутренняя обводка «огонь по краю» + общий жар (v15) */
 .tl-namaz::after {
   content: "";
   position: absolute;
@@ -1710,10 +1709,10 @@ input::placeholder { color: #626880; }
 .tl-namaz:hover::after,
 .tl-namaz.is-lit::after { opacity: 1; }
 
-/* ── плавающие волны вокруг блока ── */
+/* ── волнистая плавающая линия (v18) — единственное дополнение ── */
 .tl-namaz-edge {
   position: absolute;
-  inset: -6px;
+  inset: -5px;
   z-index: 4;
   pointer-events: none;
   opacity: 0;
@@ -1724,23 +1723,14 @@ input::placeholder { color: #626880; }
 .tl-namaz.is-lit .tl-namaz-edge { opacity: 1; }
 .tl-namaz-edge svg { width: 100%; height: 100%; display: block; overflow: visible; }
 
-/* мягкое свечение волны — часть самой линии, не вторая рамка */
-.tl-namaz-edge .edge-glow {
-  fill: none;
-  stroke: url(#namazEdgeGrad);
-  stroke-width: 9;
-  stroke-linejoin: round;
-  opacity: 0.22;
-  filter: blur(6px);
-}
-/* сама волна */
+/* ровно одна линия: тёплая, с собственным мягким ореолом */
 .tl-namaz-edge .edge-core {
   fill: none;
   stroke: url(#namazEdgeGrad);
-  stroke-width: 2.2;
+  stroke-width: 2.4;
   stroke-linejoin: round;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 5px rgba(255, 196, 92, 0.85));
+  filter: drop-shadow(0 0 4px rgba(255, 196, 92, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 60, 0.45));
 }
 
 .tl-namaz:hover .tl-namaz-edge .edge-core,
@@ -1749,19 +1739,19 @@ input::placeholder { color: #626880; }
 }
 
 @keyframes edge-flicker {
-  0%, 100% { stroke-width: 2.2; opacity: 0.95; }
-  45% { stroke-width: 2.5; opacity: 1; }
-  72% { stroke-width: 2.1; opacity: 0.9; }
+  0%, 100% { stroke-width: 2.4; opacity: 0.95; }
+  45% { stroke-width: 2.7; opacity: 1; }
+  72% { stroke-width: 2.3; opacity: 0.9; }
 }
 
-/* наведение: как v15 — блок подаётся чуть вверх и разгорается */
+/* наведение — как v15 */
 .tl-namaz:hover,
 .tl-namaz.is-lit {
   transform: translateY(-1px);
   z-index: 6;
   animation: none;
   box-shadow:
-    0 0 0 1px rgba(255, 236, 190, 0.35) inset,
+    0 0 0 1px rgba(255, 236, 190, 0.55) inset,
     0 0 60px rgba(255, 205, 110, 0.7),
     0 0 150px rgba(255, 180, 70, 0.42),
     0 0 260px rgba(255, 170, 60, 0.18);
@@ -1780,32 +1770,32 @@ input::placeholder { color: #626880; }
   font-weight: 600;
   color: #ffdc9e;
   letter-spacing: 0.2px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
-.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 232, 190, 0.85); }
+.tl-namaz-times { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: rgba(255, 226, 178, 0.78); }
 .tl-namaz-times b { font-size: 13px; color: #ffd68a; font-variant-numeric: tabular-nums; }
-.tl-namaz-times small { color: rgba(255, 232, 190, 0.75); }
+.tl-namaz-times small { color: rgba(255, 226, 178, 0.68); }
 
 .tl-namaz-scale {
   display: flex; align-items: center; gap: 6px;
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
-  color: rgba(255, 232, 190, 0.7);
+  color: rgba(255, 226, 178, 0.6);
 }
 .tl-namaz-scale .mid { color: #ffd68a; font-weight: 600; }
 .tl-namaz-scale span + span::before { content: "→"; margin-right: 6px; color: rgba(255, 226, 178, 0.35); }
 
-.tl-namaz.is-now { box-shadow: 0 0 26px rgba(255, 196, 92, 0.45); }
+.tl-namaz.is-now { box-shadow: 0 0 26px rgba(255, 196, 92, 0.5); }
 .tl-namaz.is-done { box-shadow: 0 0 22px rgba(120, 230, 200, 0.3); }
 .tl-namaz.is-done .tl-namaz-title { color: #a9f0dc; }
-.tl-namaz.is-past { opacity: 0.6; }
+.tl-namaz.is-past { opacity: 0.55; }
 .tl-namaz-now {
-  position: absolute; right: 12px; bottom: 8px;
+  position: absolute; right: 10px; bottom: 8px;
   font-size: 10px; color: #ffd68a; text-transform: lowercase; z-index: 7;
 }
-.tl-namaz-check { position: absolute; right: 14px; top: 8px; z-index: 7; color: #a9f0dc; font-weight: 700; }
+.tl-namaz-check { position: absolute; right: 12px; top: 8px; z-index: 7; color: #a9f0dc; font-weight: 700; }
 
-/* кусок обычного блока после намаза */
+/* кусок обычного блока, который начинается после намаза */
 .tl-row.is-cont { opacity: 0.92; background: rgba(255, 255, 255, 0.02); }
 .tl-row.joins { margin-top: -6px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 .tl-cont {
