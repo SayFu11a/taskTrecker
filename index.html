@@ -29,9 +29,18 @@
 <!-- лупа: клон блока намаза, двигается за курсором -->
 <div class="tl-namaz-lens" id="namazLens" aria-hidden="true">
   <div class="lens-follow">
-    <div class="lens-ring"><div class="lens-bend"><div class="lens-inner" id="namazLensInner"></div></div></div>
+    <div class="lens-ring"><div class="lens-bend"><div class="lens-warp"><div class="lens-inner" id="namazLensInner"></div></div></div></div>
   </div>
 </div>
+
+<!-- карта смещений для «гравитационной линзы»: у кромки контент тянется к центру
+     и закручивается. Считается один раз, фильтр не создаёт ни одной доп. копии DOM. -->
+<svg class="lens-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <filter id="namazLensWarp" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
+    <feImage href="lens-map.png" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="map" />
+    <feDisplacementMap in="SourceGraphic" in2="map" scale="30" xChannelSelector="R" yChannelSelector="G" />
+  </filter>
+</svg>
 
 <header class="wrap hero">
   <div class="hero-main">

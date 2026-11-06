@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v28";
+const BUILD_LABEL = "сборка v29";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -2254,12 +2254,21 @@ function lensMount(step) {
 
   lensInner.style.width = `${lensSrcRect.width}px`;
   lensInner.style.height = `${lensSrcRect.height}px`;
+  /* размер рамки для смещений: клон центрируем внутри квадрата фильтра */
+  lensInner.style.marginLeft = `${-lensSrcRect.width / 2}px`;
+  lensInner.style.marginTop = `${-lensSrcRect.height / 2}px`;
   lensBox.classList.add("on");
+  /* фильтр включим после первого кадра: если браузер тормозит, вернём простой зум */
+  requestAnimationFrame(() => {
+    if (lensBox.classList.contains("on")) document.body.classList.add("lens-ok");
+  });
 }
 
 function lensUnmount() {
   if (!lensBox) return;
   lensBox.classList.remove("on");
+  /* фильтр снимаем: в покое страница рисуется без SVG-фильтра вообще */
+  document.body.classList.remove("lens-ok");
 }
 
 function lensMove(x, y) {

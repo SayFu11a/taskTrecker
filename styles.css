@@ -1885,6 +1885,29 @@ input::placeholder { color: #626880; }
 }
 .tl-namaz-lens.on .lens-ring { transform: scale(1); }
 
+/* грав-линза: фильтр feDisplacementMap применяем к КОНТЕЙНЕРУ,
+   а не к тексту — иначе поехали бы глифы по отдельности.
+   Контейнер квадратный и постоянного размера (фильтр не расширяется), клон
+   внутри отцентрован; увеличение делаем transform'ом контейнера. */
+.lens-warp {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1024px;
+  height: 1024px;
+  margin: -512px 0 0 -512px;
+  filter: url(#namazLensWarp);
+  will-change: transform;
+  transform: scale(1);
+}
+.lens-warp .lens-inner {
+  left: 50%;
+  top: 50%;
+  margin-left: -196px;
+  margin-top: -32px;
+}
+body:not(.lens-ok) .lens-warp { filter: none; }
+
 /* клон блока: компенсируем положение курсора и увеличиваем */
 .lens-inner {
   position: absolute;
