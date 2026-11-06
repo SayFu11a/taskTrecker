@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v12";
+const BUILD_LABEL = "сборка v13";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1121,6 +1121,87 @@ function nightNow(date) {
   return { phase: "after", plan };
 }
 
+/* ─────────── намаз внутри расписания ───────────
+   Каждый дневной намаз занимает в графике три ступеньки:
+   подготовка (10 мин) → сам намаз (10 мин) → возврат к делу.
+   Блоки, в которые попадает намаз, разрезаются на две части,
+   вторая помечается «(продолжение)». Фаджр сюда не попадает:
+   он до 09:00 и живёт в ночном блоке. */
+
+const NAMAZ_PREP_MIN = 10;   // подготовка до намаза
+const NAMAZ_PRAYER_MIN = 10; // сколько отводим на сам намаз
+
+/* Вырезать из куска [from,to) интервал события. */
+function cutInterval(piece, ev) {
+  if (ev.to <= piece.from || ev.from >= piece.to) return [piece];
+  const out = [];
+  if (ev.from > piece.from) out.push({ from: piece.from, to: Math.min(ev.from, piece.to) });
+  if (ev.to < piece.to) out.push({ from: Math.max(ev.to, piece.from), to: piece.to });
+  return out;
+}
+
+/* Расписание дня вместе с намазами. */
+function dayTimeline(dateKey) {
+  const base = currentTimeline(dateKey);
+  const plain = base.map((s) => ({ ...s }));
+  if (typeof namazEnabled !== "function" || !namazEnabled()) return plain;
+
+  const dayStart = 9 * 60;
+  const dayEnd = 23 * 60;
+
+  const events = namazDay(dateKey)
+    .filter((p) => p.id !== "fajr")
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      icon: p.icon,
+      atMin: p.at,
+      from: p.at - NAMAZ_PREP_MIN,
+      to: p.at + NAMAZ_PRAYER_MIN,
+      time: p.time,
+    }))
+    /* интересуют только те, что целиком попадают в рабочий день */
+    .filter((ev) => ev.from >= dayStart && ev.to <= dayEnd);
+
+  if (!events.length) return plain;
+
+  const out = [];
+  plain.forEach((slot) => {
+    let pieces = [{ from: minutesOf(slot.from), to: minutesOf(slot.to) }];
+    events.forEach((ev) => {
+      pieces = pieces.reduce((acc, piece) => acc.concat(cutInterval(piece, ev)), []);
+    });
+    const startMin = minutesOf(slot.from);
+    pieces.forEach((piece) => {
+      if (piece.to <= piece.from) return;
+      out.push({
+        ...slot,
+        from: namazHHMM(piece.from),
+        to: namazHHMM(piece.to),
+        cont: piece.from !== startMin,
+      });
+    });
+  });
+
+  events.forEach((ev) => {
+    out.push({
+      prayer: true,
+      id: ev.id,
+      from: namazHHMM(ev.from),
+      to: namazHHMM(ev.to),
+      prep: namazHHMM(ev.from),
+      at: namazHHMM(ev.atMin),
+      end: namazHHMM(ev.to),
+      icon: ev.icon,
+      label: ev.name,
+      atMin: ev.atMin,
+    });
+  });
+
+  out.sort((a, b) => minutesOf(a.from) - minutesOf(b.from));
+  return out;
+}
+
 /* Какой сейчас интервал. Возвращает {slot, index, left, next} или null вне расписания. */
 function slotNow(date, dateKey) {
   const timeline = currentTimeline(dateKey);
@@ -1131,6 +1212,25 @@ function slotNow(date, dateKey) {
     if (mins >= from && mins < to) {
       return { slot: timeline[i], index: i, left: to - mins, next: timeline[i + 1] || null };
     }
+  }
+  return null;
+}
+
+/* Что сейчас по графику с учётом намаза: либо обычный интервал, либо ступень намаза. */
+function momentNow(date, dateKey) {
+  const key = dateKey || keyOf(date);
+  const mins = date.getHours() * 60 + date.getMinutes();
+  const rows = dayTimeline(key);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const from = minutesOf(row.from);
+    const to = minutesOf(row.to);
+    if (mins < from || mins >= to) continue;
+    if (row.prayer) {
+      const phase = mins < row.atMin ? "prep" : mins < row.atMin + NAMAZ_PRAYER_MIN ? "prayer" : "done";
+      return { row, next: rows[i + 1] || null, left: to - mins, phase, index: i, rows };
+    }
+    return { row, next: rows[i + 1] || null, left: to - mins, phase: null, index: i, rows };
   }
   return null;
 }
@@ -1265,6 +1365,40 @@ function renderNow() {
         <span class="now-workout">${wt.title} · ${wt.tag}</span>
         <span class="now-note">Расписание начнётся в 09:00</span>
       </div>`;
+    return;
+  }
+
+  /* идёт ступень намаза — показываем её, а не рабочий блок */
+  const moment = isToday ? momentNow(now, nowKey) : null;
+  if (moment && moment.row.prayer) {
+    const r = moment.row;
+    const mark = namazDone(nowKey, r.id);
+    const phaseText =
+      moment.phase === "prep"
+        ? `Подготовка · намаз в ${r.at}`
+        : moment.phase === "prayer"
+          ? `Намаз идёт · до ${r.end}`
+          : `Намаз · вернись к делу в ${r.end}`;
+    root.className = "now-card now-namaz-card";
+    root.innerHTML = `
+      <div class="now-head">
+        <span class="now-pill"><span class="live-dot"></span> Сейчас · ${timeStr}</span>
+        <span class="now-day">${WEEKDAY_NAMES[dow]}, ${DATE_FMT.format(now)}</span>
+      </div>
+      <div class="now-main">
+        <div class="now-icon">${r.icon}</div>
+        <div class="now-text">
+          <div class="now-title">${r.label} · ${r.at}</div>
+          <div class="now-sub">${phaseText} · осталось ${fmtMinutes(moment.left)}</div>
+        </div>
+      </div>
+      <button class="now-done${mark ? " is-done" : ""}" ${mark ? "disabled" : ""}>${mark ? "✓ отмечен" : "Отметить намаз"}</button>
+      <div class="now-foot">
+        <span class="now-next">${moment.next ? `Дальше ${moment.next.from} · ${moment.next.label}` : "Дальше свободное время"}</span>
+        <span class="now-workout">${wt.title} · ${wt.tag}</span>
+      </div>`;
+    const btn = root.querySelector(".now-done");
+    if (btn && !mark) btn.addEventListener("click", () => toggleNamaz(nowKey, r.id));
     return;
   }
 
@@ -1404,10 +1538,10 @@ function renderNow() {
 function renderTimeline() {
   const root = document.getElementById("timeline");
   if (!root) return;
-  const timeline = currentTimeline(selectedDate);
+  const timeline = dayTimeline(selectedDate);
   const now = new Date();
   const nowKey = keyOf(now);
-  const active = selectedDate === nowKey ? slotNow(now, nowKey) : null;
+  const moment = selectedDate === nowKey ? momentNow(now, nowKey) : null;
   const target = targetLevelFor(selectedDate);
 
   root.innerHTML = "";
@@ -1437,26 +1571,88 @@ function renderTimeline() {
 
   root.appendChild(switcher);
 
-  timeline.forEach((slot, i) => {
-    const isNow = active && active.index === i;
-    const isPast = selectedDate === nowKey && active && i < active.index;
-    const row = el(
+  let prevMinutes = -1;
+
+  timeline.forEach((row, i) => {
+    const from = minutesOf(row.from);
+    const to = minutesOf(row.to);
+    const isNow = moment && moment.index === i;
+    const isPast = selectedDate === nowKey && from < now.getHours() * 60 + now.getMinutes();
+
+    /* ── намаз: три ступеньки ── */
+    if (row.prayer) {
+      const mark = (namazMarks(selectedDate) || {})[row.id];
+      const step = el(
+        "div",
+        "tl-namaz" + (isNow ? " is-now" : "") + (mark ? " is-done" : "") + (isPast && !isNow ? " is-past" : "")
+      );
+      step.dataset.namaz = row.id;
+      step.setAttribute("role", "button");
+      step.tabIndex = 0;
+      step.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleNamaz(selectedDate, row.id);
+        }
+      });
+
+      const prepMin = minutesOf(row.at) - minutesOf(row.prep);
+      step.innerHTML = `
+        <span class="tl-namaz-glow" aria-hidden="true"></span>
+        <span class="tl-namaz-steps" aria-hidden="true">
+          <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
+        </span>
+        <span class="tl-namaz-main">
+          <span class="tl-namaz-title">${row.icon} ${row.label}</span>
+          <span class="tl-namaz-times">
+            <b>${row.at}</b>
+            <small>${row.prep} подготовка · ${row.until || ""}</small>
+          </span>
+        </span>
+        <span class="tl-namaz-scale">
+          <span>${row.prep}</span>
+          <span class="mid">${row.at}</span>
+          <span>${row.end}</span>
+        </span>
+        ${isNow ? '<span class="tl-namaz-now">сейчас</span>' : ""}
+        ${mark ? '<span class="tl-namaz-check">✓</span>' : ""}`;
+
+      step.addEventListener("click", () => toggleNamaz(selectedDate, row.id));
+      /* свет по всей странице, пока курсор на намазе */
+      step.addEventListener("mouseenter", () => document.body.classList.add("namaz-light"));
+      step.addEventListener("mouseleave", () => document.body.classList.remove("namaz-light"));
+      step.addEventListener("focus", () => document.body.classList.add("namaz-light"));
+      step.addEventListener("blur", () => document.body.classList.remove("namaz-light"));
+      if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
+      root.appendChild(step);
+      prevMinutes = to;
+      return;
+    }
+
+    /* ── обычный интервал ── */
+    const done = row.block ? levelOf(selectedDate, row.block) : null;
+    const line = el(
       "div",
-      "tl-row" + (isNow ? " is-now" : "") + (slot.tag === "глубоко" ? " strong" : "") + (isPast ? " is-past" : "")
+      "tl-row" +
+        (isNow ? " is-now" : "") +
+        (row.tag === "глубоко" ? " strong" : "") +
+        (isPast && !isNow ? " is-past" : "") +
+        (row.cont ? " is-cont" : "") +
+        (from - prevMinutes <= 1 && prevMinutes > 0 ? " joins" : "")
     );
-    const done = slot.block ? levelOf(selectedDate, slot.block) : null;
-    row.innerHTML = `
-      <span class="tl-time">${slot.from}<small>–${slot.to}</small></span>
-      <span class="tl-label">${slot.icon ? `<span class="tl-ico">${slot.icon}</span>` : ""}${slot.label}${
-        done ? ` <span class="tl-done">✓ ${LEVEL_TEXT[done]}</span>` : ""
-      }</span>
+    line.innerHTML = `
+      <span class="tl-time">${row.from}<small>–${row.to}</small></span>
+      <span class="tl-label">${row.icon ? `<span class="tl-ico">${row.icon}</span>` : ""}${row.label}${
+        row.cont ? ' <span class="tl-cont">продолжение</span>' : ""
+      }${done ? ` <span class="tl-done">✓ ${LEVEL_TEXT[done]}</span>` : ""}</span>
       ${isNow ? '<span class="tl-now">сейчас</span>' : ""}`;
-    root.appendChild(row);
+    root.appendChild(line);
+    prevMinutes = to;
   });
 
-  if (selectedDate === nowKey && active && active.slot.block && !hoursFor(nowKey, active.slot.block)) {
+  if (moment && moment.row && !moment.row.prayer && moment.row.block && !hoursFor(nowKey, moment.row.block)) {
     /* подсказка под расписанием — что отметить прямо сейчас */
-    const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === active.slot.block).name}».`);
+    const hint = el("p", "tl-hint", `Сейчас по плану <b>${LEVEL_TEXT[target]}</b> в блоке «${BLOCKS.find((b) => b.id === moment.row.block).name}».`);
     root.appendChild(hint);
   }
 }
