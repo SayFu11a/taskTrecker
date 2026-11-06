@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v16";
+const BUILD_LABEL = "сборка v17";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1147,69 +1147,42 @@ function cutInterval(piece, ev) {
 }
 
 /* ─────────── волнистый край блока намаза ───────────
-   Один контур по самому краю блока: прямая линия идёт по периметру
-   с мелкими волнами. Это и есть граница блока — второй рамки нет. */
-function namazWavePath(w, h, seed) {
-  const rnd = (i) => {
-    const x = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
-    return x - Math.floor(x);
+   Край блока — крупные круглые волны по всему периметру (как на референсе).
+   Одна линия, ничего второго: это и есть граница блока. */
+function namazWavePath(w, h) {
+  const BULGE = 4.2;   // насколько волна выступает наружу
+  const WAVE = 17;     // длина одной волны
+  const PAD = BULGE + 1;
+  const x0 = PAD;
+  const y0 = PAD;
+  const x1 = w - PAD;
+  const y1 = h - PAD;
+
+  const steps = (len) => Math.max(1, Math.round(len / WAVE));
+
+  /* сторона прямоугольника: последовательность «шапочек» через Q-кривые */
+  const side = (ax, ay, bx, by, nx, ny) => {
+    const n = steps(Math.hypot(bx - ax, by - ay));
+    const dx = (bx - ax) / n;
+    const dy = (by - ay) / n;
+    let out = "";
+    for (let i = 0; i < n; i++) {
+      const sx = ax + dx * i;
+      const sy = ay + dy * i;
+      const ex = ax + dx * (i + 1);
+      const ey = ay + dy * (i + 1);
+      const cx = (sx + ex) / 2 + nx * BULGE * 2;
+      const cy = (sy + ey) / 2 + ny * BULGE * 2;
+      out += ` Q ${cx.toFixed(1)} ${cy.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+    }
+    return out;
   };
-  const radius = 12;
-  const amp = 1.8;          // высота волны
-  const step = 22;          // длина волны
-  const inset = 1;
 
-  const pts = [];
-  const x0 = inset + radius;
-  const x1 = w - inset - radius;
-  const y0 = inset;
-  const y1 = h - inset;
-
-  /* верх */
-  let n = Math.max(3, Math.round((x1 - x0) / step));
-  for (let i = 0; i <= n; i++) {
-    const t = i / n;
-    const x = x0 + (x1 - x0) * t;
-    const wave = Math.sin(t * Math.PI * n) * amp;
-    pts.push({ x, y: y0 + wave + (rnd(i) - 0.5) * 0.7 });
-  }
-  /* правый бок */
-  const ny = Math.max(1, Math.round((y1 - y0 - radius * 2) / step));
-  for (let i = 1; i <= ny; i++) {
-    const t = i / (ny + 1);
-    const y = y0 + radius + (y1 - y0 - radius * 2) * t;
-    const wave = Math.sin(t * Math.PI * ny) * amp;
-    pts.push({ x: w - inset + wave + (rnd(10 + i) - 0.5) * 0.7, y });
-  }
-  /* низ */
-  for (let i = 0; i <= n; i++) {
-    const t = i / n;
-    const x = x1 - (x1 - x0) * t;
-    const wave = Math.sin(t * Math.PI * n) * amp;
-    pts.push({ x, y: y1 + wave + (rnd(20 + i) - 0.5) * 0.7 });
-  }
-  /* левый бок */
-  for (let i = 1; i <= ny; i++) {
-    const t = i / (ny + 1);
-    const y = y1 - radius - (y1 - y0 - radius * 2) * t;
-    const wave = Math.sin(t * Math.PI * ny) * amp;
-    pts.push({ x: inset + wave + (rnd(30 + i) - 0.5) * 0.7, y });
-  }
-
-  const N = pts.length;
-  const at = (i) => pts[(i + N) % N];
-  let d = `M ${at(0).x.toFixed(1)} ${at(0).y.toFixed(1)}`;
-  for (let i = 0; i < N; i++) {
-    const p0 = at(i - 1);
-    const p1 = at(i);
-    const p2 = at(i + 1);
-    const p3 = at(i + 2);
-    const c1x = p1.x + (p2.x - p0.x) / 6;
-    const c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6;
-    const c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-  }
+  let d = `M ${x0.toFixed(1)} ${y0.toFixed(1)}`;
+  d += side(x0, y0, x1, y0, 0, -1);   // верх
+  d += side(x1, y0, x1, y1, 1, 0);    // правый бок
+  d += side(x1, y1, x0, y1, 0, 1);    // низ
+  d += side(x0, y1, x0, y0, -1, 0);   // левый бок
   return d + " Z";
 }
 
@@ -1730,7 +1703,7 @@ function renderTimeline() {
         const h = Math.round(box.height) || 54;
         const holder = step.querySelector(".tl-namaz-edge");
         if (!holder || w < 40) return;
-        const d = namazWavePath(w, h, (row.id || "p").length + h);
+        const d = namazWavePath(w, h);
         holder.innerHTML = `
           <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
             <defs>
