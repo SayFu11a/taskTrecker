@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v17";
+const BUILD_LABEL = "сборка v18";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1149,32 +1149,42 @@ function cutInterval(piece, ev) {
 /* ─────────── рамка намаза: плавающий волнистый контур ───────────
    Строим плавную замкнутую кривую по периметру блока (Catmull-Rom → Безье),
    точки выходят за границы на пару пикселей — контур «плывёт», как на референсе. */
-function namazWavePath(w, h, seed) {
+function namazWavePath(w, h, seed, radius) {
   const rnd = (i) => {
-    /* детерминированный «шум», чтобы рамка не дёргалась при каждом рендере */
+    /* детерминированный «шум»: рамка не дёргается при каждом рендере */
     const x = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
     return x - Math.floor(x);
   };
-  const pts = [];
-  const nx = 5;
-  const ny = 3;
-  const inset = 4;
+  const r = Math.min(radius || 16, w / 3, h / 3);
+  const inset = 1.5;
+  const x0 = inset;
+  const y0 = inset;
+  const x1 = w - inset;
+  const y1 = h - inset;
+  const wob = (i) => (rnd(i) - 0.5) * 3; // лёгкое «желе»
 
-  for (let i = 0; i < nx; i++) {
-    const t = i / nx;
-    pts.push({ x: inset + t * (w - inset * 2), y: inset + (rnd(i) - 0.5) * 4.5 });
+  const pts = [];
+  /* верх — по прямой между скруглениями */
+  const nx = Math.max(3, Math.round((w - r * 2) / 52));
+  for (let i = 0; i <= nx; i++) {
+    const x = x0 + r + ((x1 - x0 - r * 2) * i) / nx;
+    pts.push({ x, y: y0 + wob(i) });
   }
-  for (let i = 0; i < ny; i++) {
-    const t = (i + 1) / (ny + 1);
-    pts.push({ x: w - inset - (rnd(10 + i) - 0.5) * 4.5, y: inset + t * (h - inset * 2) });
+  /* правый бок */
+  const ny = Math.max(1, Math.round((h - r * 2) / 24));
+  for (let i = 1; i <= ny; i++) {
+    const y = y0 + r + ((y1 - y0 - r * 2) * i) / (ny + 1);
+    pts.push({ x: x1 + wob(10 + i), y });
   }
-  for (let i = 0; i < nx; i++) {
-    const t = i / nx;
-    pts.push({ x: w - inset - t * (w - inset * 2), y: h - inset - (rnd(20 + i) - 0.5) * 4.5 });
+  /* низ */
+  for (let i = 0; i <= nx; i++) {
+    const x = x1 - r - ((x1 - x0 - r * 2) * i) / nx;
+    pts.push({ x, y: y1 + wob(20 + i) });
   }
-  for (let i = 0; i < ny; i++) {
-    const t = (i + 1) / (ny + 1);
-    pts.push({ x: inset + (rnd(30 + i) - 0.5) * 4.5, y: h - inset - t * (h - inset * 2) });
+  /* левый бок */
+  for (let i = 1; i <= ny; i++) {
+    const y = y1 - r - ((y1 - y0 - r * 2) * i) / (ny + 1);
+    pts.push({ x: x0 + wob(30 + i), y });
   }
 
   const n = pts.length;
@@ -1746,7 +1756,8 @@ function renderTimeline() {
         const w = Math.round(box.width) || 320;
         const h = Math.round(box.height) || 56;
         const seed = (row.id || "p").length + h;
-        const d = namazWavePath(w, h, seed);
+        const radius = parseFloat(getComputedStyle(step).borderRadius) || 16;
+        const d = namazWavePath(w, h, seed, radius);
         const holder = step.querySelector(".tl-namaz-edge");
         if (!holder) return;
         holder.innerHTML = `
@@ -1759,8 +1770,7 @@ function renderTimeline() {
                 <stop offset="1" stop-color="#ffe6a8"/>
               </linearGradient>
             </defs>
-            <path class="edge-back" d="${d}"/>
-            <path class="edge-mid" d="${d}"/>
+            <path class="edge-glow" d="${d}"/>
             <path class="edge-core" d="${d}"/>
           </svg>`;
       };
