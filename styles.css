@@ -1843,7 +1843,7 @@ body.namaz-light::after { opacity: 1; transform: scale(1); }
 body::before {
   content: "";
   position: fixed;
-  inset: -80vmax;
+  inset: 0;
   pointer-events: none;
   z-index: 41;
   opacity: 0;
@@ -1861,18 +1861,18 @@ body::before {
       rgba(255, 196, 92, 0.10) 0deg 0.9deg,
       rgba(255, 196, 92, 0) 0.9deg 21deg
     );
-  /* лучи уходят далеко за края экрана: только мягкое начало у курсора,
-     никакой внешней границы */
+  /* лучи жёстко прикреплены к курсору: начало (дырка) — ровно в точке мыши,
+     дальше расходятся до краёв экрана без внешней границы */
   -webkit-mask-image: radial-gradient(
-    circle 150vmax at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 6%,
-    #000 24%,
+    circle at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 10px,
+    #000 90px,
     #000 100%
   );
   mask-image: radial-gradient(
-    circle 150vmax at var(--page-mx, 50%) var(--page-my, 35%),
-    transparent 6%,
-    #000 24%,
+    circle at var(--page-mx, 50%) var(--page-my, 35%),
+    transparent 10px,
+    #000 90px,
     #000 100%
   );
   mix-blend-mode: screen;
