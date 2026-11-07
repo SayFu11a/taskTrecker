@@ -73,8 +73,7 @@
 
   var svgDefs = null;
   var made = {};
-  var madeCount = 0;
-  var MAX_FILTERS = 24;
+  var filterSerial = 0;
   var LENS_SIZE = 320;
   var LENS_RADIUS = LENS_SIZE / 2;
   var LENS_SCALE = 220;
@@ -118,7 +117,7 @@
   function resetFilters() {
     if (svgDefs) while (svgDefs.firstChild) svgDefs.removeChild(svgDefs.firstChild);
     made = {};
-    madeCount = 0;
+    filterSerial = 0;
     var nodes = document.querySelectorAll(SEL);
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].removeAttribute("data-lg");
@@ -186,10 +185,11 @@
     img.setAttribute("y", String(-LENS_SIZE * 2));
   }
 
-  function filterFor(w, h) {
-    var id = "lg-" + w + "x" + h;
-    if (made[id]) return id;
-    if (madeCount >= MAX_FILTERS) resetFilters();
+  function filterFor(w, h, el) {
+    /* У каждого блока свой SVG filter и своя feImage-карта.
+       Нельзя делить фильтр только по размерам: иначе курсор одного
+       блока двигает общую карту и деформирует все блоки того же размера. */
+    var id = "lg-block-" + (++filterSerial);
 
     var bezel = Math.max(6, Math.min(BEZEL, h / 2 - 2));
     var url;
@@ -264,7 +264,6 @@
     ensureDefs().appendChild(f);
     made[id] = true;
     lensImages[id] = lens;
-    madeCount++;
     return id;
   }
 
@@ -275,10 +274,8 @@
     if (w < 48 || h < 24) return; // вкладка скрыта
     var key = w + "x" + h;
     if (el.getAttribute("data-lg-size") === key && el.getAttribute("data-lg")) return;
-    var id = filterFor(w, h);
+    var id = filterFor(w, h, el);
     if (!id) return;
-    el.style.setProperty("--lg-refract", "url(#" + id + ")");
-    el.style.setProperty("--lg-shape-refract", "url(#" + id + ")");
     /* Важно: SVG-фильтр применяем к самому HTML-блоку.
        Тогда SourceGraphic включает его фон, border и содержимое,
        а не только псевдоэлемент блика или backdrop за блоком. */
