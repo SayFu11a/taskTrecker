@@ -222,11 +222,16 @@ begin
 
   total := greatest(coalesce(stored, 0), t.base_min) + elapsed;
 
+  /* minAt — отметка правки (миллисекунды по часам базы). Без неё устройство
+     со старым (большим) числом минут «перебивало» записанный стоп, и часы
+     возвращались при синхронизации. */
   insert into public.days (user_id, date, hours)
-  values (u, t.date, jsonb_build_object(t.block, jsonb_build_object('min', total)))
+  values (u, t.date, jsonb_build_object(t.block,
+            jsonb_build_object('min', total, 'minAt', (extract(epoch from now()) * 1000)::bigint)))
   on conflict (user_id, date) do update
     set hours = coalesce(public.days.hours, '{}'::jsonb)
-                || jsonb_build_object(t.block, jsonb_build_object('min', total));
+                || jsonb_build_object(t.block,
+                     jsonb_build_object('min', total, 'minAt', (extract(epoch from now()) * 1000)::bigint));
 
   delete from public.timers where user_id = u;
 

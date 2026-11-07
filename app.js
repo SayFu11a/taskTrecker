@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v35";
+const BUILD_LABEL = "сборка v36";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -12,6 +12,10 @@ const DEFAULT_STATE = {
   week: 1,
   leetcode: [],    // [{ id, name, theme, diff, date }]
   hours: {},        // { "2026-11-04": { ulbi: 95, leetcode: 30 } } — единственный источник: минуты
+  /* Когда минуты блока меняли в последний раз: { "2026-11-04": { ulbi: 1794000000000 } }.
+     Без этого слияние «большее время побеждает» делало удаление невозможным:
+     стёртые на компьютере 2 часа возвращались с телефона. */
+  minAt: {},
   namaz: {},        // { "2026-11-06": { fajr: true, ... } } — отмеченные намазы
   namazOn: true,    // показывать блок намаза
   timer: null,      // legacy, не используется: таймер живёт в state.hours[дата][блок].timer
@@ -38,9 +42,10 @@ let state = load();
 function blockRecord(dateKey, blockId) {
   const day = (state.hours || {})[dateKey];
   const rec = day ? day[blockId] : null;
-  if (rec === undefined || rec === null) return { min: 0, timer: null, stoppedAt: null };
-  if (typeof rec === "number") return { min: rec, timer: null, stoppedAt: null };
-  return { min: Number(rec.min) || 0, timer: rec.timer || null, stoppedAt: rec.stoppedAt || null };
+  if (rec === undefined || rec === null) return { min: 0, timer: null, stoppedAt: null, minAt: 0 };
+  if (typeof rec === "number") return { min: rec, timer: null, stoppedAt: null, minAt: 0 };
+  const at = Number(rec.minAt) || (typeof state !== "undefined" && state.minAt ? Number((state.minAt[dateKey] || {})[blockId]) : 0) || 0;
+  return { min: Number(rec.min) || 0, timer: rec.timer || null, stoppedAt: rec.stoppedAt || null, minAt: at };
 }
 
 /* Идущий таймер по блоку: { startedAt, startedAtIso } или null. */
@@ -66,18 +71,41 @@ function runningTimers() {
 }
 
 /* Единственное место, где пишутся минуты дня. Идущий таймер сохраняется. */
-function writeMinutes(dateKey, blockId, minutes) {
+function writeMinutes(dateKey, blockId, minutes, opts) {
   if (!state.hours) state.hours = {};
   const day = state.hours[dateKey] || (state.hours[dateKey] = {});
   const next = Math.max(0, Math.round(minutes || 0));
   const prev = blockRecord(dateKey, blockId);
   const timer = prev.timer;
-  if (timer) day[blockId] = { min: next, timer };
-  else if (prev.stoppedAt) day[blockId] = { min: next, stoppedAt: prev.stoppedAt };
-  else day[blockId] = { min: next };
+
+  /* Каждое изменение минут получает отметку времени. Именно по ней, а не по
+     «у кого больше», синхронизация решает, чья правка свежее. Иначе минус
+     на компьютере проигрывал телефону, и стёртые часы возвращались. */
+  /* Отметка всегда идёт вперёд: правка, сделанная сразу после другой, должна
+     быть строго новее, иначе при слиянии могли остаться прежние минуты. */
+  const prevAt = prev.minAt || 0;
+  let at = opts && Number.isFinite(opts.at) ? opts.at : stampNow();
+  if (at <= prevAt) at = prevAt + 1;
+  touchMinutes(dateKey, blockId, at);
+
+  if (timer) day[blockId] = { min: next, timer, minAt: at };
+  else if (prev.stoppedAt) day[blockId] = { min: next, stoppedAt: prev.stoppedAt, minAt: at };
+  else day[blockId] = { min: next, minAt: at };
   if (!Object.keys(day).length) delete state.hours[dateKey];
-  touchDay(dateKey);
+
+  /* день всё равно считается изменённым — mode и прочее едут вместе с ним */
+  if (!opts || !opts.quiet) touchDay(dateKey);
   save();
+}
+
+/* Отметка изменения минут блока. Время серверное (если знаем поправку),
+   чтобы часы устройства не решали, чья правка новее. */
+function touchMinutes(dateKey, blockId, atMs) {
+  if (!state.minAt) state.minAt = {};
+  const day = state.minAt[dateKey] || (state.minAt[dateKey] = {});
+  const at = Number.isFinite(atMs) ? atMs : stampNow();
+  day[blockId] = at;
+  return at;
 }
 
 /* Включить/выключить таймер блока, не трогая записанные минуты.
@@ -212,11 +240,18 @@ function normalizeStateHours(st) {
         const st = new Date(rec.stoppedAt).getTime();
         if (Number.isFinite(st)) stoppedAt = new Date(st).toISOString();
       }
-      if (min > 0 || timer || stoppedAt) {
+      const minAt = Number(rec.minAt) || 0;
+      if (min > 0 || timer || stoppedAt || minAt) {
         const rec2 = { min };
         if (timer) rec2.timer = timer;
         else if (stoppedAt) rec2.stoppedAt = stoppedAt;
+        if (minAt) rec2.minAt = minAt;
         norm[id] = rec2;
+        if (minAt) {
+          st.minAt = st.minAt || {};
+          st.minAt[date] = st.minAt[date] || {};
+          st.minAt[date][id] = minAt;
+        }
       }
     });
     if (Object.keys(norm).length) out[date] = norm;
@@ -232,6 +267,13 @@ function saveLocalOnly() {
   } catch (e) {
     console.warn("Не удалось сохранить", e);
   }
+}
+
+/* Отметка правки по серверным часам — для тех мест, где правка должна
+   победить чужие. Нужна, потому что часы устройства могут врать: телефон,
+   отстающий на 5 часов, иначе проигрывал бы любому старому пушу. */
+function stampNow() {
+  return typeof srvNowMs === "function" ? srvNowMs() : Date.now();
 }
 
 function save() {
@@ -426,7 +468,13 @@ function stopTimer(dateKey, blockId) {
       /* Минуты посчитала база — сразу переносим их в состояние. Иначе
          ближайший пуш отправил бы на сервер старое (меньшее) число
          и затёр то, что уже записано. */
-      if (Number.isFinite(Number(res.min))) writeMinutes(res.date, res.block, Number(res.min));
+      if (Number.isFinite(Number(res.min))) {
+        /* отметка правки — из ответа базы, чтобы наше число минут было
+           свежее любых старых копий на других устройствах */
+        const at = Number(res.min_at) || (typeof srvNowMs === "function" ? srvNowMs() : Date.now());
+        touchMinutes(res.date, res.block, at);
+        writeMinutes(res.date, res.block, Number(res.min), { at });
+      }
       if (typeof tabAnnounce === "function") tabAnnounce("stop", { date: res.date, block: res.block });
       if (Number(res.elapsed_min) >= 1) {
         toast(`Записано ${fmtMinutes(res.elapsed_min)}.`);
@@ -517,7 +565,7 @@ function toast(msg) {
    чья версия свежее (телефон или компьютер). */
 function touchDay(key) {
   if (!state.meta) state.meta = {};
-  state.meta[key] = Date.now();
+  state.meta[key] = stampNow();
 }
 
 function modeFor(key) {
