@@ -53,6 +53,7 @@ async function initSync() {
       renderAccount();
       if (typeof renderPushBox === "function") renderPushBox();
       if (event === "SIGNED_IN") pullThenPush();
+      if (event === "SIGNED_OUT") stopRealtimeSubscription();
     });
 
     await reportOauthError();
@@ -101,6 +102,7 @@ async function signInWithGoogle() {
 
 async function signOut() {
   if (!sb) return;
+  stopRealtimeSubscription();
   await sb.auth.signOut();
   session = null;
   renderAccount();
@@ -144,12 +146,17 @@ function normalizeDayForDb(day) {
       if (rec > 0) out[id] = { min: rec };
       return;
     }
-    if (!rec) return;
+    if (!rec || typeof rec !== "object") return;
     const min = Number(rec.min) || 0;
     const startedAt = rec.timer && rec.timer.startedAt;
-    if (!min && !startedAt) return;
+    const stopTs = rec.stoppedAt ? new Date(rec.stoppedAt).getTime() : NaN;
+    const stoppedAt = Number.isFinite(stopTs) ? new Date(stopTs).toISOString() : null;
+    /* stoppedAt — tombstone таймера. Его нельзя выбрасывать даже при min=0:
+       иначе старый timer.startedAt с сервера снова запустится на другом устройстве. */
+    if (!min && !startedAt && !stoppedAt) return;
     out[id] = { min };
     if (startedAt) out[id].timer = { startedAt };
+    else if (stoppedAt) out[id].stoppedAt = stoppedAt;
   });
   return out;
 }
@@ -162,28 +169,39 @@ function normalizeDayForDb(day) {
    целиком (поэтому снятая галочка не «воскресает» с другого устройства).
    Записи без updatedAt (старые данные) объединяем: отметка остаётся,
    если она есть хотя бы с одной стороны. */
-function mergeGym(localGym, remoteGym) {
+function mergeGym(localGym, remoteGym, remoteUpdatedAt) {
   const out = {};
   const weeks = new Set([...Object.keys(localGym || {}), ...Object.keys(remoteGym || {})]);
+  const serverTs = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : 0;
   weeks.forEach((week) => {
     const a = (localGym || {})[week] || {};
     const b = (remoteGym || {})[week] || {};
     const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-    const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    /* Старые записи gym не содержат updatedAt внутри недели.
+       Используем время строки settings, чтобы устаревший локальный updatedAt
+       не затёр серверную отметку тренировки. */
+    const ownRemoteTs = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    const tb = ownRemoteTs || serverTs;
 
-    if (ta || tb) {
+    if (ta && tb) {
       const winner = tb > ta ? b : a;
       const merged = { ...winner };
       if (winner.updatedAt) merged.updatedAt = winner.updatedAt;
+      else if (winner === b && serverTs) merged.updatedAt = new Date(serverTs).toISOString();
       out[week] = merged;
       return;
     }
-
+    if (ta && !tb) {
+      out[week] = { ...a };
+      return;
+    }
+    if (tb && !ta) {
+      out[week] = { ...b, updatedAt: b.updatedAt || new Date(tb).toISOString() };
+      return;
+    }
     const days = new Set([...Object.keys(a), ...Object.keys(b)]);
     const merged = {};
-    days.forEach((day) => {
-      merged[day] = !!(a[day] || b[day]);
-    });
+    days.forEach((day) => { merged[day] = !!(a[day] || b[day]); });
     out[week] = merged;
   });
   return out;
@@ -254,6 +272,7 @@ function mergeRowsIntoState(rows) {
 
 async function pullThenPush() {
   if (!sb || !session) return;
+  ensureRealtimeSubscription();
   if (syncBusy) return;
   syncBusy = true;
 
@@ -273,6 +292,7 @@ async function pullThenPush() {
 
     await pushAll();
     await pullSettings();
+    await pushSettings();
     toast("Синхронизировано");
   } catch (e) {
     console.warn("Не удалось синхронизировать", e);
@@ -319,15 +339,17 @@ async function pushSettings() {
     }
   } catch (e) {
     console.warn("Настройки не ушли", e);
+    throw e;
   }
 }
 
-async function pullSettings() {
+async function pullSettings(options = {}) {
   if (!sb || !session) return;
   try {
-    const { data } = await sb.from("settings").select("*").eq("user_id", session.user.id).maybeSingle();
+    const { data, error } = await sb.from("settings").select("*").eq("user_id", session.user.id).maybeSingle();
+    if (error) throw error;
     if (!data) {
-      await pushSettings();
+      if (options.pushIfMissing !== false) await pushSettings();
       return;
     }
     if (typeof data.week === "number") state.week = data.week;
@@ -336,26 +358,97 @@ async function pullSettings() {
       state.achievements = { ...(state.achievements || {}), ...data.achievements };
     }
     if (Array.isArray(data.leetcode) && data.leetcode.length) state.leetcode = data.leetcode;
-    /* отметки намаза сливаем: выполненные на любом устройстве остаются выполненными */
     if (data.namaz && typeof data.namaz === "object") {
       const local = state.namaz || {};
       const merged = { ...data.namaz };
-      Object.keys(local).forEach((date) => {
-        merged[date] = { ...(merged[date] || {}), ...local[date] };
-      });
+      Object.keys(local).forEach((date) => { merged[date] = { ...(merged[date] || {}), ...local[date] }; });
       state.namaz = merged;
     }
     if (typeof data.namaz_on === "boolean") state.namazOn = data.namaz_on;
-    /* Тренировки: отметка одна и та же на всех устройствах, поэтому
-       объединяем — отмеченное где-то ещё не должно пропасть здесь.
-       Формат: { "<неделя>": { mon: true, wed: false, fri: true } }. */
     if (data.gym && typeof data.gym === "object" && !Array.isArray(data.gym)) {
-      state.gym = mergeGym(state.gym || {}, data.gym);
+      state.gym = mergeGym(state.gym || {}, data.gym, data.updated_at);
     }
     saveLocalOnly();
     renderAll();
   } catch (e) {
     console.warn("Настройки не пришли", e);
+    throw e;
+  }
+}
+
+/* ─────────── синхронизация в реальном времени ─────────── */
+let realtimeChannel = null;
+let realtimeUserId = null;
+let realtimePullTimer = null;
+
+function stopRealtimeSubscription() {
+  if (realtimePullTimer) {
+    clearTimeout(realtimePullTimer);
+    realtimePullTimer = null;
+  }
+  if (realtimeChannel && sb) sb.removeChannel(realtimeChannel).catch(() => {});
+  realtimeChannel = null;
+  realtimeUserId = null;
+}
+
+function ensureRealtimeSubscription() {
+  if (!sb || !session) return;
+  const userId = session.user.id;
+  if (realtimeChannel && realtimeUserId === userId) return;
+  stopRealtimeSubscription();
+  realtimeUserId = userId;
+  realtimeChannel = sb
+    .channel("vp-tracker-sync:" + userId)
+    .on("postgres_changes", {
+      event: "*", schema: "public", table: "days", filter: "user_id=eq." + userId,
+    }, scheduleRealtimePull)
+    .on("postgres_changes", {
+      event: "*", schema: "public", table: "settings", filter: "user_id=eq." + userId,
+    }, scheduleRealtimePull)
+    .subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn("Supabase Realtime недоступен:", status);
+      }
+    });
+}
+
+function scheduleRealtimePull() {
+  clearTimeout(realtimePullTimer);
+  realtimePullTimer = setTimeout(() => {
+    realtimePullTimer = null;
+    pullRealtimeState();
+  }, 250);
+}
+
+async function pullRealtimeState() {
+  if (!sb || !session) return;
+  if (syncBusy) {
+    scheduleRealtimePull();
+    return;
+  }
+  syncBusy = true;
+  try {
+    const before = JSON.stringify({
+      hours: state.hours, modes: state.modes, week: state.week, gym: state.gym,
+      namaz: state.namaz, namazOn: state.namazOn, leetcode: state.leetcode,
+    });
+    const { data, error } = await sb.from("days")
+      .select("date,blocks,hours,mode,updated_at").eq("user_id", session.user.id);
+    if (error) throw error;
+    if (data && data.length) mergeRowsIntoState(data);
+    await pullSettings({ pushIfMissing: false });
+    const after = JSON.stringify({
+      hours: state.hours, modes: state.modes, week: state.week, gym: state.gym,
+      namaz: state.namaz, namazOn: state.namazOn, leetcode: state.leetcode,
+    });
+    if (before !== after) {
+      saveLocalOnly();
+      renderAll();
+    }
+  } catch (e) {
+    console.warn("Realtime: не удалось обновить состояние", e);
+  } finally {
+    syncBusy = false;
   }
 }
 
