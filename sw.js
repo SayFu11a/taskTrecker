@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v36-smooth-namaz-lens";
+const VERSION = "vp-tracker-v37-frosted-glass-hover";
 const SHELL = [
   "./",
   "./index.html",
