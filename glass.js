@@ -11,7 +11,9 @@
       подключает её через backdrop-filter: url(#…) — фон за кромкой стекла
       по-настоящему преломляется. В Safari и Firefox этого браузеры не умеют,
       там остаётся размытие + блики из glass.css;
-   3) на телефоне нет hover: касание и удержание тянут блок так же.
+   3) на телефоне нет hover: касание и удержание тянут блок так же;
+   4) линза-выпуклость под курсором: круглое стекло, которое увеличивает
+      и выпячивает всё рядом (на мыши и пере, на касании не показывается).
 
    Все значения уходят в CSS-переменные --gx --gy --sx --sy --lx --ly --tz,
    transform считает glass.css. */
@@ -58,9 +60,25 @@
     return [-nx * mag, -ny * mag]; // внутрь
   }
 
+  /* Радиальная линза (выпуклость под курсором), диаметр d.
+     Вектор смещения направлен к центру: фон внутри увеличивается.
+     Сила ρ·(1−ρ⁴): в центре 0, максимум на ≈0.67 радиуса, у кромки снова 0,
+     поэтому линза плавно сливается с окружением. Нормировка 0.535 — максимум
+     функции, так что длина вектора не больше 1. */
+  function lensAt(x, y, d) {
+    var c = d / 2;
+    var dx = x + 0.5 - c;
+    var dy = y + 0.5 - c;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var rho = dist / c;
+    if (!(rho > 0 && rho < 1)) return [0, 0];
+    var g = (rho * (1 - Math.pow(rho, 4))) / 0.535;
+    return [(-dx / dist) * g, (-dy / dist) * g];
+  }
+
   if (typeof document === "undefined") {
     /* запуск вне браузера (проверка математики в Node) */
-    if (typeof module !== "undefined" && module.exports) module.exports = { displacementAt: displacementAt };
+    if (typeof module !== "undefined" && module.exports) module.exports = { displacementAt: displacementAt, lensAt: lensAt };
     return;
   }
 
@@ -278,7 +296,8 @@
         live.delete(el); // покой под курсором: цикл спит до следующего движения
       }
     });
-    if (live.size) raf = requestAnimationFrame(tick);
+    var lensMoving = lensStep();
+    if (live.size || lensMoving) raf = requestAnimationFrame(tick);
   }
 
   function kick() {
@@ -343,6 +362,166 @@
     kick();
   }
 
+  /* ─────────── выпуклость под курсором (линза) ───────────
+     Круглое стекло ездит за курсором по блоку, как «чёрная дыра наоборот»:
+     не втягивает, а выпячивает и увеличивает всё рядом — текст блока и
+     соседние строки, куда линза заходит краями. Это отдельный элемент
+     в <body>: его backdrop-filter видит всю страницу, включая сам блок.
+     Скорость мыши растягивает линзу по ходу движения, нажатие сплющивает. */
+
+  var LENS_D = 132; // диаметр, px (то же число в .lg-lens в glass.css)
+  var LENS_MAX = 14; // максимальный сдвиг выборки фона у кромки линзы, px
+  var lens = {
+    el: null,
+    on: false,
+    press: false,
+    hasLast: false,
+    lastX: 0,
+    lastY: 0,
+    dvx: 0,
+    dvy: 0,
+    x: { p: 0, v: 0, t: 0 },
+    y: { p: 0, v: 0, t: 0 },
+    s: { p: 0, v: 0, t: 0 },
+    sx: { p: 1, v: 0, t: 1 },
+    sy: { p: 1, v: 0, t: 1 }
+  };
+
+  function makeLensMap(d) {
+    var canvas = document.createElement("canvas");
+    canvas.width = d;
+    canvas.height = d;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(d, d);
+    var data = img.data;
+    for (var y = 0; y < d; y++) {
+      for (var x = 0; x < d; x++) {
+        var v = lensAt(x, y, d);
+        var i = (y * d + x) * 4;
+        data[i] = Math.round(128 + v[0] * 127);
+        data[i + 1] = Math.round(128 + v[1] * 127);
+        data[i + 2] = 128;
+        data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas.toDataURL("image/png");
+  }
+
+  function ensureLens() {
+    if (lens.el) return lens.el;
+    var el = document.createElement("div");
+    el.className = "lg-lens";
+    el.setAttribute("aria-hidden", "true");
+    document.body.appendChild(el);
+    lens.el = el;
+
+    if (canRefract) {
+      try {
+        var f = document.createElementNS(NS, "filter");
+        f.setAttribute("id", "lg-lens");
+        f.setAttribute("filterUnits", "userSpaceOnUse");
+        f.setAttribute("primitiveUnits", "userSpaceOnUse");
+        f.setAttribute("x", "0");
+        f.setAttribute("y", "0");
+        f.setAttribute("width", String(LENS_D));
+        f.setAttribute("height", String(LENS_D));
+        f.setAttribute("color-interpolation-filters", "sRGB");
+
+        var feImg = document.createElementNS(NS, "feImage");
+        feImg.setAttribute("href", makeLensMap(LENS_D));
+        feImg.setAttribute("x", "0");
+        feImg.setAttribute("y", "0");
+        feImg.setAttribute("width", String(LENS_D));
+        feImg.setAttribute("height", String(LENS_D));
+        feImg.setAttribute("preserveAspectRatio", "none");
+        feImg.setAttribute("result", "map");
+
+        var disp = document.createElementNS(NS, "feDisplacementMap");
+        disp.setAttribute("in", "SourceGraphic");
+        disp.setAttribute("in2", "map");
+        disp.setAttribute("scale", String(LENS_MAX * 2)); // макс. сдвиг = scale / 2
+        disp.setAttribute("xChannelSelector", "R");
+        disp.setAttribute("yChannelSelector", "G");
+
+        f.appendChild(feImg);
+        f.appendChild(disp);
+        ensureDefs().appendChild(f);
+        el.style.setProperty("--lens-refract", "url(#lg-lens)");
+      } catch (err) {
+        /* без карты линза остаётся стеклянным пузырём с бликами */
+      }
+    }
+    return el;
+  }
+
+  function spring(c, k, d) {
+    c.v += (c.t - c.p) * k;
+    c.v *= d;
+    c.p += c.v;
+    return Math.abs(c.v) > 0.002 || Math.abs(c.t - c.p) > 0.002;
+  }
+
+  /* true — линза ещё движется, и цикл должен продолжаться */
+  function lensStep() {
+    if (!lens.el) return false;
+    lens.dvx *= 0.85;
+    lens.dvy *= 0.85;
+    var ex = Math.min(0.28, Math.abs(lens.dvx) * 0.012);
+    var ey = Math.min(0.28, Math.abs(lens.dvy) * 0.012);
+    var sq = lens.press ? 0.08 : 0;
+    lens.s.t = lens.on ? 1 : 0;
+    lens.sx.t = 1 + ex - ey * 0.4 - sq;
+    lens.sy.t = 1 + ey - ex * 0.4 - sq;
+
+    var moving = false;
+    if (spring(lens.x, 0.3, 0.68)) moving = true; // небольшое запаздывание — «жидкость»
+    if (spring(lens.y, 0.3, 0.68)) moving = true;
+    if (spring(lens.s, 0.2, 0.7)) moving = true; // появление с лёгким перелётом
+    if (spring(lens.sx, 0.22, 0.7)) moving = true;
+    if (spring(lens.sy, 0.22, 0.7)) moving = true;
+
+    var sc = Math.max(0, lens.s.p);
+    var st = lens.el.style;
+    st.transform =
+      "translate3d(" + lens.x.p.toFixed(1) + "px," + lens.y.p.toFixed(1) + "px,0) scale(" +
+      (lens.sx.p * sc).toFixed(3) + "," + (lens.sy.p * sc).toFixed(3) + ")";
+    st.opacity = String(Math.min(1, sc * 1.5));
+    st.visibility = sc < 0.01 && !lens.on ? "hidden" : "visible";
+    return moving || Math.abs(lens.dvx) + Math.abs(lens.dvy) > 0.5;
+  }
+
+  function lensFollow(e) {
+    if (reduceMotion || e.pointerType === "touch") return;
+    if (!ensureLens()) return;
+    if (!lens.on) {
+      /* появляемся сразу под курсором, а не «прилетаем» из прошлой точки */
+      lens.on = true;
+      lens.x.p = lens.x.t = e.clientX;
+      lens.y.p = lens.y.t = e.clientY;
+      lens.x.v = lens.y.v = 0;
+      lens.dvx = lens.dvy = 0;
+      lens.hasLast = false;
+    }
+    if (lens.hasLast) {
+      lens.dvx = clamp(e.clientX - lens.lastX, -80, 80);
+      lens.dvy = clamp(e.clientY - lens.lastY, -80, 80);
+    }
+    lens.lastX = e.clientX;
+    lens.lastY = e.clientY;
+    lens.hasLast = true;
+    lens.x.t = e.clientX;
+    lens.y.t = e.clientY;
+    kick();
+  }
+
+  function lensOff() {
+    if (!lens.on) return;
+    lens.on = false;
+    lens.press = false;
+    kick();
+  }
+
   /* ─────────── события ─────────── */
 
   function blockOf(e) {
@@ -364,6 +543,8 @@
       } else if (el) {
         move(el, e);
       }
+      if (el) lensFollow(e);
+      else lensOff();
     },
     { passive: true }
   );
@@ -379,11 +560,19 @@
         enter(el, e);
       }
       press(el, true);
+      if (e.pointerType !== "touch") {
+        lens.press = true; // нажатие слегка сплющивает линзу
+        kick();
+      }
     },
     { passive: true }
   );
 
   function release(e) {
+    if (lens.press) {
+      lens.press = false;
+      kick();
+    }
     if (!active) return;
     var el = active;
     press(el, false);
@@ -401,6 +590,7 @@
   document.addEventListener("pointercancel", release, { passive: true });
 
   function dropActive() {
+    lensOff();
     if (active) {
       leave(active);
       active = null;

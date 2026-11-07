@@ -206,3 +206,77 @@
     --sy: 1;
   }
 }
+
+/* ─────────── линза-выпуклость под курсором ───────────
+   Элемент создаёт glass.js и кладёт в <body>. Позицию, растяжение и
+   прозрачность задаёт скрипт. Диаметр совпадает с LENS_D в glass.js.
+   В Chromium --lens-refract подключает карту преломления: фон внутри
+   увеличивается. В Safari и Firefox остаётся стеклянный пузырь с бликами. */
+.lg-lens {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 132px;
+  height: 132px;
+  margin: -66px 0 0 -66px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 60;
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 236, 200, 0) 56%,
+    rgba(255, 214, 140, 0.14) 100%
+  );
+  -webkit-backdrop-filter: blur(1px) saturate(1.35) brightness(1.1);
+  backdrop-filter: var(--lens-refract, blur(0px)) blur(0.6px) saturate(1.35) brightness(1.1);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.38),
+    inset 0 3px 4px rgba(255, 255, 255, 0.55),
+    inset 0 -8px 16px rgba(255, 200, 120, 0.16),
+    0 20px 32px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* кромка: яркая сверху-слева, тёплая снизу-справа */
+.lg-lens::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  padding: 1.5px;
+  background: conic-gradient(
+    from 210deg at 50% 50%,
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 255, 255, 0.1) 24%,
+    rgba(255, 214, 150, 0.45) 50%,
+    rgba(255, 255, 255, 0.08) 68%,
+    rgba(255, 255, 255, 0.8) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* зеркальный блик сверху-слева и тёплый отсвет снизу-справа */
+.lg-lens::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 26%),
+    radial-gradient(circle at 72% 82%, rgba(255, 214, 150, 0.3), rgba(255, 214, 150, 0) 42%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-lens {
+    display: none;
+  }
+}
