@@ -156,6 +156,39 @@ function normalizeDayForDb(day) {
 
 /* Слить день с сервера с локальным ПО БЛОКАМ, а не целиком:
    если на телефоне отмечали LeetCode, а на ПК — Ulbi, оба сохранятся. */
+/* Слияние тренировок.
+   Формат: { "<неделя>": { mon: true, wed: false, fri: true, updatedAt: ISO } }.
+   Правило простое: у недели есть updatedAt — чья запись новее, та и права
+   целиком (поэтому снятая галочка не «воскресает» с другого устройства).
+   Записи без updatedAt (старые данные) объединяем: отметка остаётся,
+   если она есть хотя бы с одной стороны. */
+function mergeGym(localGym, remoteGym) {
+  const out = {};
+  const weeks = new Set([...Object.keys(localGym || {}), ...Object.keys(remoteGym || {})]);
+  weeks.forEach((week) => {
+    const a = (localGym || {})[week] || {};
+    const b = (remoteGym || {})[week] || {};
+    const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+
+    if (ta || tb) {
+      const winner = tb > ta ? b : a;
+      const merged = { ...winner };
+      if (winner.updatedAt) merged.updatedAt = winner.updatedAt;
+      out[week] = merged;
+      return;
+    }
+
+    const days = new Set([...Object.keys(a), ...Object.keys(b)]);
+    const merged = {};
+    days.forEach((day) => {
+      merged[day] = !!(a[day] || b[day]);
+    });
+    out[week] = merged;
+  });
+  return out;
+}
+
 function mergeDay(localDay, remoteDay) {
   const out = {};
   const local = localDay || {};
@@ -172,10 +205,20 @@ function mergeDay(localDay, remoteDay) {
     const bTimer = b && b.timer && b.timer.startedAt;
     /* если таймер идёт на двух устройствах — берём тот, что раньше начался */
     const timers = [aTimer, bTimer].filter(Boolean).map((x) => new Date(x).getTime()).filter(Number.isFinite);
-    const startedAt = timers.length ? new Date(Math.min(...timers)).toISOString() : null;
+    const startedAt = timers.length ? Math.min(...timers) : null;
 
-    if (!min && !startedAt) return;
-    out[id] = startedAt ? { min, timer: { startedAt } } : { min };
+    /* Остановка — это тоже событие со своим временем. Если таймер погасили
+       позже, чем он был запущен на другом устройстве, гасим его везде:
+       иначе «остановил — а он возобновился» на соседней вкладке. */
+    const stops = [a && a.stoppedAt, b && b.stoppedAt]
+      .filter(Boolean).map((x) => new Date(x).getTime()).filter(Number.isFinite);
+    const stoppedAt = stops.length ? Math.max(...stops) : null;
+    const isOff = stoppedAt && (!startedAt || stoppedAt >= startedAt);
+
+    if (!min && !startedAt && !stoppedAt) return;
+    if (isOff) out[id] = { min, stoppedAt: new Date(stoppedAt).toISOString() };
+    else if (startedAt) out[id] = { min, timer: { startedAt: new Date(startedAt).toISOString() } };
+    else out[id] = { min };
   });
 
   return out;
@@ -261,6 +304,8 @@ async function pushSettings() {
         leetcode: state.leetcode || [],
         namaz: state.namaz || {},
         namaz_on: state.namazOn !== false,
+        /* Тренировки жили только в localStorage — на телефоне их не было. */
+        gym: state.gym || {},
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }
@@ -301,6 +346,12 @@ async function pullSettings() {
       state.namaz = merged;
     }
     if (typeof data.namaz_on === "boolean") state.namazOn = data.namaz_on;
+    /* Тренировки: отметка одна и та же на всех устройствах, поэтому
+       объединяем — отмеченное где-то ещё не должно пропасть здесь.
+       Формат: { "<неделя>": { mon: true, wed: false, fri: true } }. */
+    if (data.gym && typeof data.gym === "object" && !Array.isArray(data.gym)) {
+      state.gym = mergeGym(state.gym || {}, data.gym);
+    }
     saveLocalOnly();
     renderAll();
   } catch (e) {

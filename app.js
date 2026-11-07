@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v32";
+const BUILD_LABEL = "сборка v34";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -38,9 +38,9 @@ let state = load();
 function blockRecord(dateKey, blockId) {
   const day = (state.hours || {})[dateKey];
   const rec = day ? day[blockId] : null;
-  if (rec === undefined || rec === null) return { min: 0, timer: null };
-  if (typeof rec === "number") return { min: rec, timer: null };
-  return { min: Number(rec.min) || 0, timer: rec.timer || null };
+  if (rec === undefined || rec === null) return { min: 0, timer: null, stoppedAt: null };
+  if (typeof rec === "number") return { min: rec, timer: null, stoppedAt: null };
+  return { min: Number(rec.min) || 0, timer: rec.timer || null, stoppedAt: rec.stoppedAt || null };
 }
 
 /* Идущий таймер по блоку: { startedAt, startedAtIso } или null. */
@@ -70,21 +70,32 @@ function writeMinutes(dateKey, blockId, minutes) {
   if (!state.hours) state.hours = {};
   const day = state.hours[dateKey] || (state.hours[dateKey] = {});
   const next = Math.max(0, Math.round(minutes || 0));
-  const timer = blockRecord(dateKey, blockId).timer;
-  if (!next && !timer) delete day[blockId];
-  else day[blockId] = timer ? { min: next, timer } : { min: next };
+  const prev = blockRecord(dateKey, blockId);
+  const timer = prev.timer;
+  if (timer) day[blockId] = { min: next, timer };
+  else if (prev.stoppedAt) day[blockId] = { min: next, stoppedAt: prev.stoppedAt };
+  else day[blockId] = { min: next };
   if (!Object.keys(day).length) delete state.hours[dateKey];
   touchDay(dateKey);
   save();
 }
 
-/* Включить/выключить таймер блока, не трогая записанные минуты. */
+/* Включить/выключить таймер блока, не трогая записанные минуты.
+   При остановке остаётся отметка stoppedAt: по ней видно, что таймер
+   выключили, а не «он ещё не дошёл до другого устройства». Без неё
+   слияние с сервером не могло отличить «остановлен» от «не отправлен». */
 function setBlockTimer(dateKey, blockId, startedAtIso) {
   if (!state.hours) state.hours = {};
   const day = state.hours[dateKey] || (state.hours[dateKey] = {});
   const min = blockRecord(dateKey, blockId).min;
-  if (!min && !startedAtIso) delete day[blockId];
-  else day[blockId] = startedAtIso ? { min, timer: { startedAt: startedAtIso } } : { min };
+  if (!min && !startedAtIso) {
+    /* пустой блок: и минуты ноль, и таймер выключен — держим только отметку */
+    day[blockId] = { min: 0, stoppedAt: new Date().toISOString() };
+  } else {
+    day[blockId] = startedAtIso
+      ? { min, timer: { startedAt: startedAtIso } }
+      : { min, stoppedAt: new Date().toISOString() };
+  }
   if (!Object.keys(day).length) delete state.hours[dateKey];
   touchDay(dateKey);
   save();
@@ -189,7 +200,17 @@ function normalizeStateHours(st) {
         const ts = new Date(rec.timer.startedAt).getTime();
         if (Number.isFinite(ts)) timer = { startedAt: new Date(ts).toISOString() };
       }
-      if (min > 0 || timer) norm[id] = timer ? { min, timer } : { min };
+      let stoppedAt = null;
+      if (!timer && rec.stoppedAt) {
+        const st = new Date(rec.stoppedAt).getTime();
+        if (Number.isFinite(st)) stoppedAt = new Date(st).toISOString();
+      }
+      if (min > 0 || timer || stoppedAt) {
+        const rec2 = { min };
+        if (timer) rec2.timer = timer;
+        else if (stoppedAt) rec2.stoppedAt = stoppedAt;
+        norm[id] = rec2;
+      }
     });
     if (Object.keys(norm).length) out[date] = norm;
   });
@@ -209,6 +230,8 @@ function saveLocalOnly() {
 function save() {
   saveLocalOnly();
   if (booting) return;
+  /* соседние вкладки читают то же хранилище — говорим им, что данные сменились */
+  if (typeof tabAnnounce === "function") tabAnnounce("save");
   if (typeof refreshAchievements === "function") refreshAchievements();
   if (typeof syncSoon === "function") syncSoon();
 }
@@ -357,6 +380,7 @@ function startTimer(blockId) {
     return;
   }
   setBlockTimer(selectedDate, blockId, new Date().toISOString());
+  if (typeof tabAnnounce === "function") tabAnnounce("start", { date: selectedDate, block: blockId });
   renderAll();
   toast(`Таймер пошёл: ${blockName(blockId)}`);
   play("tick");
@@ -387,6 +411,12 @@ function stopTimer(dateKey, blockId) {
       writeMinutes(date, block, rec.min);
     }
   });
+
+  /* Соседние вкладки должны погасить таймер немедленно, а не после
+     следующей подтяжки с сервера: именно здесь он «возобновлялся». */
+  if (typeof tabAnnounce === "function") {
+    tabAnnounce("stop", targets.length === 1 ? { date: targets[0].date, block: targets[0].block } : {});
+  }
 
   if (total >= 1) {
     toast(`Записано ${fmtMinutes(total)}.`);
@@ -977,6 +1007,15 @@ function renderWeek() {
 
 /* ─────────────── тренировки ─────────────── */
 
+/* Неделя тренировок всегда объект. Раньше здесь стояло `state.gym[week] ||= {}`,
+   и при пустом gym на новом устройстве это тихо терялось между рендерами. */
+function ensureGymWeek(week) {
+  if (!state.gym || typeof state.gym !== "object") state.gym = {};
+  const cur = state.gym[week];
+  if (!cur || typeof cur !== "object") state.gym[week] = {};
+  return state.gym[week];
+}
+
 function renderGym() {
   const week = state.week;
 
@@ -1001,7 +1040,7 @@ function renderGym() {
 
   /* чеки */
   const plan = gymPlanFor(week); // [{key:'mon', label:'Понедельник — A', workout:'A'}, ...]
-  const saved = state.gym[week] || (state.gym[week] = {});
+  const saved = ensureGymWeek(week);
   const checks = document.getElementById("gymChecks");
   checks.innerHTML = "";
   plan.forEach((p) => {
@@ -1009,11 +1048,13 @@ function renderGym() {
     row.innerHTML = `<span class="box">✓</span><span>${p.label}</span><span class="wc">25–35 мин</span>`;
     row.addEventListener("click", (e) => {
       e.preventDefault();
-      saved[p.key] = !saved[p.key];
+      const w = ensureGymWeek(state.week);
+      w[p.key] = !w[p.key];
+      w.updatedAt = new Date().toISOString(); // снятая галочка тоже должна уехать
       save();
       renderGym();
       renderHero();
-      if (saved[p.key]) {
+      if (ensureGymWeek(state.week)[p.key]) {
         play("workout");
         toast("Тренировка отмечена. Восстановление — часть программы.");
       }

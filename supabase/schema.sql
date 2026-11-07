@@ -24,8 +24,16 @@ create table if not exists public.settings (
   schedule_view text        not null default 'detail',
   achievements  jsonb       not null default '{}'::jsonb,
   leetcode      jsonb       not null default '[]'::jsonb,
+  namaz         jsonb       not null default '{}'::jsonb,
+  namaz_on      boolean     not null default true,
+  gym           jsonb       not null default '{}'::jsonb,
   updated_at    timestamptz not null default now()
 );
+
+-- Догоняем уже созданные базы: тренировки раньше не хранились на сервере.
+alter table public.settings add column if not exists namaz    jsonb   not null default '{}'::jsonb;
+alter table public.settings add column if not exists namaz_on boolean not null default true;
+alter table public.settings add column if not exists gym      jsonb   not null default '{}'::jsonb;
 
 -- ─────────── подписки на push ───────────
 create table if not exists public.push_subscriptions (
