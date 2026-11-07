@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v34";
+const BUILD_LABEL = "сборка v35";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -87,13 +87,17 @@ function writeMinutes(dateKey, blockId, minutes) {
 function setBlockTimer(dateKey, blockId, startedAtIso) {
   if (!state.hours) state.hours = {};
   const day = state.hours[dateKey] || (state.hours[dateKey] = {});
-  const min = blockRecord(dateKey, blockId).min;
+  const prev = blockRecord(dateKey, blockId);
+  const min = prev.min;
+  /* byServer — отметку поставил сервер: такую нельзя сравнивать с локальными
+     часами, а «остановкой» её гасит только ответ сервера */
+  const mark = prev.timer && prev.timer.byServer;
   if (!min && !startedAtIso) {
     /* пустой блок: и минуты ноль, и таймер выключен — держим только отметку */
     day[blockId] = { min: 0, stoppedAt: new Date().toISOString() };
   } else {
     day[blockId] = startedAtIso
-      ? { min, timer: { startedAt: startedAtIso } }
+      ? { min, timer: mark ? { startedAt: startedAtIso, byServer: true } : { startedAt: startedAtIso } }
       : { min, stoppedAt: new Date().toISOString() };
   }
   if (!Object.keys(day).length) delete state.hours[dateKey];
@@ -198,7 +202,10 @@ function normalizeStateHours(st) {
       let timer = null;
       if (rec.timer && rec.timer.startedAt) {
         const ts = new Date(rec.timer.startedAt).getTime();
-        if (Number.isFinite(ts)) timer = { startedAt: new Date(ts).toISOString() };
+        if (Number.isFinite(ts)) {
+          timer = { startedAt: new Date(ts).toISOString() };
+          if (rec.timer.byServer) timer.byServer = true;
+        }
       }
       let stoppedAt = null;
       if (!timer && rec.stoppedAt) {
@@ -325,11 +332,16 @@ function savedMinutesFor(dateKey, blockId) {
   return blockMinutes(day[blockId]);
 }
 
-/* Сколько сейчас тикает по блоку (незаписанные минуты). */
+/* Сколько сейчас тикает по блоку (незаписанные минуты).
+   Если таймер поставил сервер — считаем по его часам: телефон со сбитым
+   временем иначе показывал лишние часы и записывал их в минуты. */
 function runningMinutesFor(dateKey, blockId) {
   const t = timerFor(dateKey, blockId);
   if (!t) return 0;
-  return Math.max(0, Math.floor((Date.now() - t.startedAt) / 60000));
+  const rec = blockRecord(dateKey, blockId);
+  const byServer = rec.timer && rec.timer.byServer && typeof srvNowMs === "function";
+  const now = byServer ? srvNowMs() : Date.now();
+  return Math.max(0, Math.floor((now - t.startedAt) / 60000));
 }
 
 /* Минуты «как есть сейчас»: записанные + тикающий таймер.
@@ -379,6 +391,10 @@ function startTimer(blockId) {
     toast(`Уже идёт таймер: «${blockName(running[0].block)}». Сначала останови его.`);
     return;
   }
+  /* Старт фиксирует сервер: его отметка одна для всех устройств.
+     Без сети ставим обычную отметку — таймер продолжит работать локально. */
+  const baseMin = savedMinutesFor(selectedDate, blockId);
+  if (typeof timerStartRemote === "function") timerStartRemote(blockId, selectedDate, baseMin);
   setBlockTimer(selectedDate, blockId, new Date().toISOString());
   if (typeof tabAnnounce === "function") tabAnnounce("start", { date: selectedDate, block: blockId });
   renderAll();
@@ -386,15 +402,46 @@ function startTimer(blockId) {
   play("tick");
 }
 
-/* Стоп: тикающее время переезжает в записанные минуты. */
+/* Стоп: тикающее время переезжает в записанные минуты.
+   Если таймер серверный — минуты считает база и сама пишет их в день,
+   локально мы только гасим отметку (иначе «+5 часов» со сбитых часов
+   телефона попали бы в минуты навсегда). */
 function stopTimer(dateKey, blockId) {
   const targets = [];
   if (blockId) targets.push({ date: dateKey || selectedDate, block: blockId });
   else runningTimers().forEach((t) => targets.push({ date: t.date, block: t.block }));
   if (!targets.length) return;
 
+  const isServer = ({ date, block }) => {
+    const rec = blockRecord(date, block);
+    return !!(rec.timer && rec.timer.byServer);
+  };
+  const serverTargets = targets.filter(isServer);
+  const localTargets = targets.filter((t) => !isServer(t));
+
+  /* ── серверные: спрашиваем базу, она вернёт посчитанные минуты ── */
+  if (serverTargets.length && typeof timerStopRemote === "function") {
+    timerStopRemote().then((res) => {
+      if (!res || !res.stopped) return;
+      /* Минуты посчитала база — сразу переносим их в состояние. Иначе
+         ближайший пуш отправил бы на сервер старое (меньшее) число
+         и затёр то, что уже записано. */
+      if (Number.isFinite(Number(res.min))) writeMinutes(res.date, res.block, Number(res.min));
+      if (typeof tabAnnounce === "function") tabAnnounce("stop", { date: res.date, block: res.block });
+      if (Number(res.elapsed_min) >= 1) {
+        toast(`Записано ${fmtMinutes(res.elapsed_min)}.`);
+        play("markGood");
+      } else {
+        toast("Меньше минуты — не записал.");
+      }
+    });
+    /* гасим отметку сразу, чтобы счётчик остановился на экране */
+    serverTargets.forEach(({ date, block }) => setBlockTimer(date, block, null));
+  }
+
+  /* ── локальные (офлайн или старые данные): считаем сами ── */
   let total = 0;
-  targets.forEach(({ date, block }) => {
+  localTargets.forEach(({ date, block }) => {
     const t = timerFor(date, block);
     if (!t) return;
     let min = Math.round((Date.now() - t.startedAt) / 60000);
@@ -412,18 +459,18 @@ function stopTimer(dateKey, blockId) {
     }
   });
 
-  /* Соседние вкладки должны погасить таймер немедленно, а не после
-     следующей подтяжки с сервера: именно здесь он «возобновлялся». */
-  if (typeof tabAnnounce === "function") {
-    tabAnnounce("stop", targets.length === 1 ? { date: targets[0].date, block: targets[0].block } : {});
+  if (localTargets.length) {
+    if (total >= 1) {
+      toast(`Записано ${fmtMinutes(total)}.`);
+      play("markGood");
+    } else {
+      toast("Меньше минуты — не записал.");
+    }
+    if (typeof tabAnnounce === "function") {
+      tabAnnounce("stop", targets.length === 1 ? { date: targets[0].date, block: targets[0].block } : {});
+    }
   }
 
-  if (total >= 1) {
-    toast(`Записано ${fmtMinutes(total)}.`);
-    play("markGood");
-  } else {
-    toast("Меньше минуты — не записал.");
-  }
   renderAll();
 }
 

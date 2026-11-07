@@ -64,7 +64,10 @@ async function initSync() {
     const { data } = await sb.auth.getSession();
     session = data.session || null;
 
-    if (session) await pullThenPush();
+    if (session) {
+      await pullThenPush();
+      if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
+    }
     else if (hasLocalData()) await maybeOfferMigration();
   } catch (e) {
     console.warn("Синхронизация недоступна", e);
@@ -149,7 +152,11 @@ function normalizeDayForDb(day) {
     const startedAt = rec.timer && rec.timer.startedAt;
     if (!min && !startedAt) return;
     out[id] = { min };
-    if (startedAt) out[id].timer = { startedAt };
+    if (startedAt) {
+      out[id].timer = { startedAt };
+      /* отметку поставил сервер — другим устройствам это важно знать */
+      if (rec.timer && rec.timer.byServer) out[id].timer.byServer = true;
+    }
   });
   return out;
 }
@@ -206,6 +213,7 @@ function mergeDay(localDay, remoteDay) {
     /* если таймер идёт на двух устройствах — берём тот, что раньше начался */
     const timers = [aTimer, bTimer].filter(Boolean).map((x) => new Date(x).getTime()).filter(Number.isFinite);
     const startedAt = timers.length ? Math.min(...timers) : null;
+    const byServer = Boolean((a && a.timer && a.timer.byServer) || (b && b.timer && b.timer.byServer));
 
     /* Остановка — это тоже событие со своим временем. Если таймер погасили
        позже, чем он был запущен на другом устройстве, гасим его везде:
@@ -217,7 +225,10 @@ function mergeDay(localDay, remoteDay) {
 
     if (!min && !startedAt && !stoppedAt) return;
     if (isOff) out[id] = { min, stoppedAt: new Date(stoppedAt).toISOString() };
-    else if (startedAt) out[id] = { min, timer: { startedAt: new Date(startedAt).toISOString() } };
+    else if (startedAt) {
+      out[id] = { min, timer: { startedAt: new Date(startedAt).toISOString() } };
+      if (byServer) out[id].timer.byServer = true;
+    }
     else out[id] = { min };
   });
 
@@ -273,6 +284,8 @@ async function pullThenPush() {
 
     await pushAll();
     await pullSettings();
+    /* Таймер — серверный: именно он решает, идёт он или уже погашен */
+    if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
     toast("Синхронизировано");
   } catch (e) {
     console.warn("Не удалось синхронизировать", e);
@@ -395,7 +408,11 @@ window.addEventListener("online", () => {
 
 /* Вернулись во вкладку — подтягиваем изменения с других устройств. */
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && sb && session && !syncBusy) pullThenPush();
+  if (document.hidden) return;
+  /* Открыли вкладку/вернулись с телефона — сначала спрашиваем сервер про
+     таймер: он мог быть остановлен на другом устройстве. */
+  if (typeof timerSyncFromServer === "function") timerSyncFromServer();
+  if (sb && session && !syncBusy) pullThenPush();
 });
 
 /* ─────────── ошибки возврата после входа ─────────── */
