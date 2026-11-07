@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v31";
+const BUILD_LABEL = "сборка v32";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -1146,74 +1146,6 @@ function cutInterval(piece, ev) {
   return out;
 }
 
-/* ─────────── волнистый край блока намаза ───────────
-   Край блока — крупные круглые волны (как на референсе).
-   Волны физически бегут по периметру: путь пересчитывается по фазе,
-   а SVG-анимация морфит между фазами — гребни едут по кругу. */
-
-const NAMAZ_WAVE_BULGE = 4;   // насколько волна выступает наружу
-const NAMAZ_WAVE_LEN = 18;    // длина одной волны, px
-const NAMAZ_WAVE_STEP = 3;    // шаг сэмплирования (меньше — плавнее морф)
-
-/* Один периметр с фазой phase (0..1). Возвращает строку path. */
-function namazWavePath(w, h, phase) {
-  const pad = NAMAZ_WAVE_BULGE + 1;
-  const x0 = pad;
-  const y0 = pad;
-  const x1 = w - pad;
-  const y1 = h - pad;
-
-  const pts = [];
-  const push = (x, y, nx, ny, offset) => {
-    const wave = NAMAZ_WAVE_BULGE * (0.5 + 0.5 * Math.sin(offset));
-    pts.push([x + nx * wave, y + ny * wave]);
-  };
-
-  /* верх: слева → направо, волна наружу (ny = -1) */
-  const topLen = x1 - x0;
-  const topN = Math.max(2, Math.round(topLen / NAMAZ_WAVE_STEP));
-  for (let i = 0; i < topN; i++) {
-    const t = i / topN;
-    const along = t * topLen;
-    push(x0 + along, y0, 0, -1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
-  }
-  /* правый бок: сверху вниз */
-  const sideLen = y1 - y0;
-  const sideN = Math.max(2, Math.round(sideLen / NAMAZ_WAVE_STEP));
-  for (let i = 0; i < sideN; i++) {
-    const t = i / sideN;
-    const along = t * sideLen;
-    push(x1, y0 + along, 1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
-  }
-  /* низ: справа налево */
-  for (let i = 0; i < topN; i++) {
-    const t = i / topN;
-    const along = t * topLen;
-    push(x1 - along, y1, 0, 1, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
-  }
-  /* левый бок: снизу вверх */
-  for (let i = 0; i < sideN; i++) {
-    const t = i / sideN;
-    const along = t * sideLen;
-    push(x0, y1 - along, -1, 0, (along / NAMAZ_WAVE_LEN) * Math.PI * 2 + phase * Math.PI * 2);
-  }
-
-  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  for (let i = 1; i < pts.length; i++) {
-    d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
-  }
-  return d + " Z";
-}
-
-/* Кадры анимации: волны едут по кругу, 8 фаз на цикл. */
-function namazWaveFrames(w, h) {
-  const total = 8;
-  const frames = [];
-  for (let i = 0; i < total; i++) frames.push(namazWavePath(w, h, i / total));
-  return frames;
-}
-
-/* Расписание дня вместе с намазами. */
 function dayTimeline(dateKey) {
   const base = currentTimeline(dateKey);
   const plain = base.map((s) => ({ ...s }));
@@ -1671,8 +1603,6 @@ function renderTimeline() {
 
       const prepMin = minutesOf(row.at) - minutesOf(row.prep);
       step.innerHTML = `
-        <span class="tl-namaz-edge" aria-hidden="true"></span>
-        <span class="tl-namaz-glow" aria-hidden="true"></span>
         <span class="tl-namaz-steps" aria-hidden="true">
           <i class="step step-1"></i><i class="step step-2"></i><i class="step step-3"></i>
         </span>
@@ -1693,65 +1623,19 @@ function renderTimeline() {
 
       step.addEventListener("click", () => toggleNamaz(selectedDate, row.id));
 
-      /* свет живёт там, где мышка: источник света двигается за курсором */
+      /* Позиция блика внутри стекла (--mx/--my читают glass.css и glass.js).
+         Класс is-lit, форму и преломление ведёт glass.js: если ставить его
+         и здесь, два обработчика mouseleave гасили друг друга. */
       const moveLight = (e) => {
         const box = step.getBoundingClientRect();
+        if (!box.width || !box.height) return;
         const x = ((e.clientX - box.left) / box.width) * 100;
         const y = ((e.clientY - box.top) / box.height) * 100;
         step.style.setProperty("--mx", `${Math.max(0, Math.min(100, x))}%`);
         step.style.setProperty("--my", `${Math.max(0, Math.min(100, y))}%`);
       };
-      /* свет по странице: двигаем отдельный слой, только transform, без перерисовки */
-      const movePageLight = (e) => glowMove(e.clientX, e.clientY);
-      step.addEventListener("pointermove", (e) => {
-        moveLight(e);
-        movePageLight(e);
-        dropMove(e.clientX, e.clientY);
-      });
-      step.addEventListener("mouseenter", (e) => {
-        step.classList.add("is-lit");
-        moveLight(e);
-        glowOn(e.clientX, e.clientY);
-      });
-      step.addEventListener("mouseleave", () => {
-        step.classList.remove("is-lit");
-        step.style.removeProperty("--mx");
-        step.style.removeProperty("--my");
-        glowOff();
-      });
-      step.addEventListener("focus", () => glowOn());
-      step.addEventListener("blur", () => {
-        glowOff();
-        dropUnmount();
-      });
-      /* сам край блока становится волнистым: строим контур по его размеру */
-      requestAnimationFrame(() => {
-        /* offsetWidth/Height — размеры без transform, чтобы зум при наведении
-           не пересчитывал рамку */
-        const w = step.offsetWidth || 320;
-        const h = step.offsetHeight || 54;
-        const holder = step.querySelector(".tl-namaz-edge");
-        if (!holder || w < 40) return;
-        const frames = namazWaveFrames(w, h);
-        holder.innerHTML = `
-          <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="namazEdgeGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#fff3cf"/>
-                <stop offset="0.45" stop-color="#ffcf7a"/>
-                <stop offset="1" stop-color="#ffb04d"/>
-              </linearGradient>
-            </defs>
-            <path class="edge-flame" d="${frames[0]}" pathLength="1000">
-              <animate attributeName="d" dur="2.1s" repeatCount="indefinite"
-                       calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
-            </path>
-            <path class="edge-core" d="${frames[0]}" pathLength="1000">
-              <animate attributeName="d" dur="2.1s" repeatCount="indefinite"
-                       calcMode="linear" values="${frames.join(";")};${frames[0]}"/>
-            </path>
-          </svg>`;
-      });
+      step.addEventListener("pointermove", moveLight, { passive: true });
+      step.addEventListener("pointerenter", moveLight, { passive: true });
 
       if (prepMin !== NAMAZ_PREP_MIN) step.classList.add("is-tight");
       root.appendChild(step);
@@ -1786,7 +1670,6 @@ function renderTimeline() {
       const box = node.getBoundingClientRect();
       node.style.setProperty("--mx", `${((e.clientX - box.left) / box.width) * 100}%`);
       node.style.setProperty("--my", `${((e.clientY - box.top) / box.height) * 100}%`);
-      glowMove(e.clientX, e.clientY);
     });
   });
 
@@ -2180,117 +2063,6 @@ function namazTick() {
   });
 }
 setInterval(namazTick, 20000);
-
-/* ─────────── свет по странице от намаза ───────────
-   Источник света двигается за курсором без transition (иначе он «плывёт»),
-   а появление и исчезновение — только через transform: масштаб слоя.
-   Двигаем переменные в rAF, чтобы не дёргать стили на каждое событие. */
-var glowLayer = null;
-var glowPosNodes = [];
-var glowPoint = { x: 0, y: 0 };
-var glowRaf = 0;
-
-/* ─────────── капля-лупа над блоком намаза ───────────
-   Копия блока лежит в круглом слое 1:1 по мировым координатам; двигаем
-   только transform'ы (контейнер за курсором + копия на место блока).
-   Ни layout, ни чтения пикселей из-под слоя — на кадр только композиция. */
-var dropBox = null;
-var dropFollow = null;
-var dropCopy = null;
-var dropRect = null;
-var dropPoint = { x: 0, y: 0 };
-var dropRaf = 0;
-var DROP_SIZE = 260;
-
-function dropNodes() {
-  if (dropBox) return dropBox;
-  dropBox = document.getElementById("namazDrop");
-  if (!dropBox) return null;
-  dropFollow = dropBox.querySelector(".drop-follow");
-  dropCopy = document.getElementById("namazDropCopy");
-  return dropBox;
-}
-
-function dropMount(step) {
-  if (!dropNodes() || !dropCopy) return;
-  /* рамка без transform: блок при наведении подпрыгивает и растёт */
-  const r = step.getBoundingClientRect();
-  const bw = step.offsetWidth || r.width;
-  const bh = step.offsetHeight || r.height;
-  dropRect = {
-    left: r.left + (r.width - bw) / 2,
-    top: r.top + (r.height - bh) / 2,
-    width: bw,
-    height: bh,
-  };
-  const clone = step.cloneNode(true);
-  clone.removeAttribute("role");
-  clone.removeAttribute("tabindex");
-  clone.removeAttribute("data-namaz");
-  clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
-  clone.className = "tl-namaz is-lit";
-  dropCopy.innerHTML = "";
-  dropCopy.appendChild(clone);
-  dropCopy.style.width = `${bw}px`;
-  dropCopy.style.height = `${bh}px`;
-  dropBox.classList.add("on");
-  document.body.classList.add("lens-on");
-}
-
-function dropUnmount() {
-  if (!dropBox) return;
-  dropBox.classList.remove("on");
-  document.body.classList.remove("lens-on");
-}
-
-function dropMove(x, y) {
-  dropPoint.x = x;
-  dropPoint.y = y;
-  if (dropRaf) return;
-  dropRaf = requestAnimationFrame(() => {
-    dropRaf = 0;
-    if (!dropFollow || !dropCopy || !dropRect) return;
-    dropFollow.style.setProperty("--drop-x", `${dropPoint.x}px`);
-    dropFollow.style.setProperty("--drop-y", `${dropPoint.y}px`);
-    /* копию ставим так, чтобы она совпала с настоящим блоком:
-       мировые координаты -> координаты капли (капля центрирована на курсоре) */
-    const dx = dropRect.left - (dropPoint.x - DROP_SIZE / 2);
-    const dy = dropRect.top - (dropPoint.y - DROP_SIZE / 2);
-    dropCopy.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
-  });
-}
-
-function glowInit() {
-  glowLayer = document.getElementById("namazGlow");
-  if (!glowLayer) return;
-  glowPosNodes = [...glowLayer.querySelectorAll(".glow-pos")];
-}
-
-function glowMove(x, y) {
-  glowPoint.x = x;
-  glowPoint.y = y;
-  if (glowRaf) return;
-  glowRaf = requestAnimationFrame(() => {
-    glowRaf = 0;
-    if (!glowLayer) return;
-    glowLayer.style.setProperty("--page-px", `${glowPoint.x}px`);
-    glowLayer.style.setProperty("--page-py", `${glowPoint.y}px`);
-  });
-}
-
-function glowOn(x, y) {
-  if (!glowLayer) glowInit();
-  if (!glowLayer) return;
-  if (typeof x === "number") glowMove(x, y);
-  glowLayer.classList.add("on");
-}
-
-function glowOff() {
-  if (!glowLayer) return;
-  glowLayer.classList.remove("on");
-}
-
-glowInit();
 
 /* ─────────── расписание намаза из API ───────────
    Один раз при загрузке, дальше — при смене месяца/даты и по таймеру.

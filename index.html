@@ -17,40 +17,11 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
 <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="glass.css" />
 </head>
 <body>
 <div class="bg-glow" aria-hidden="true"></div>
 <!-- капля-лупа: слой фиксирован, двигается только transform'ом -->
-<div class="namaz-drop" id="namazDrop" aria-hidden="true">
-  <div class="drop-follow">
-    <div class="drop-glass">
-      <div class="drop-warp"><div class="drop-copy" id="namazDropCopy"></div></div>
-      <div class="drop-rim"></div>
-    </div>
-  </div>
-</div>
-<!-- свет от намаза: отдельные слои, двигаются только transform'ом -->
-<div class="namaz-glow-layer" id="namazGlow" aria-hidden="true">
-  <div class="glow-pos"><div class="spot-disc"></div></div>
-  <div class="glow-pos"><div class="halo"></div></div>
-  <div class="glow-pos"><div class="rays-scale"><div class="rays-disc"></div></div></div>
-</div>
-
-<!-- «капля жидкости» на блоке намаза.
-     feDisplacementMap смещает пиксели по карте lens-map.png: в центре карта
-     нейтральная (ничего не двигается), к кромке пиксели стягиваются к центру
-     и слегка закручиваются — содержимое тянется, как сквозь каплю стекла.
-     Внутри капли лежит 1:1 копия блока, поэтому текст «продолжается» без шва. -->
-<svg class="lens-defs" width="0" height="0" aria-hidden="true" focusable="false">
-  <filter id="namazDrop" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
-    <feImage href="lens-map.png" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="map" />
-    <feDisplacementMap in="SourceGraphic" in2="map" scale="52"
-      xChannelSelector="R" yChannelSelector="G" result="warped" />
-    <feGaussianBlur in="warped" stdDeviation="0.4" result="soft" />
-    <feComposite in="soft" in2="warped" operator="over" />
-  </filter>
-</svg>
-
 <header class="wrap hero">
   <div class="hero-main">
     <div class="eyebrow"><span class="dot"></span> Система, а не экзамен</div>
@@ -345,5 +316,6 @@
 <script src="sync.js"></script>
 <script src="push.js"></script>
 <script src="app.js"></script>
+<script src="glass.js"></script>
 </body>
 </html>
