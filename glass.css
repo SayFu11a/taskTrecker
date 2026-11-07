@@ -6,7 +6,7 @@
    --sx --sy  растяжение по осям
    --lx --ly  положение блика, %
    --tz       небольшое увеличение текста
-   --lg-refract  url(#фильтр) с картой преломления (только Chromium) */
+   --lg-refract  url(#фильтр) с картой преломления и локальной линзой курсора (Chromium) */
 
 /* старые слои неона, лучей и капли-лупы больше не нужны */
 .timeline .tl-namaz > .tl-namaz-edge,
@@ -90,6 +90,12 @@
   box-shadow: none;
   transition: opacity 0.3s ease;
   background:
+    radial-gradient(
+      24% 90% at var(--lx, 28%) var(--ly, -10%),
+      rgba(255, 255, 255, 0.2),
+      rgba(255, 255, 255, 0.055) 48%,
+      transparent 76%
+    ),
     radial-gradient(
       140% 85% at var(--lx, 28%) var(--ly, -10%),
       rgba(255, 255, 255, 0.3),
