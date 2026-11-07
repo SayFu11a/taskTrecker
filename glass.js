@@ -122,6 +122,7 @@
     var nodes = document.querySelectorAll(SEL);
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].removeAttribute("data-lg");
+      nodes[i].removeAttribute("data-lg-size");
       nodes[i].style.removeProperty("--lg-refract");
       nodes[i].style.removeProperty("--lg-shape-refract");
     }
@@ -271,12 +272,13 @@
     var h = el.offsetHeight;
     if (w < 48 || h < 24) return; // вкладка скрыта
     var key = w + "x" + h;
-    if (el.getAttribute("data-lg") === key) return;
+    if (el.getAttribute("data-lg-size") === key && el.getAttribute("data-lg")) return;
     var id = filterFor(w, h);
     if (!id) return;
     el.style.setProperty("--lg-refract", "url(#" + id + ")");
     el.style.setProperty("--lg-shape-refract", "url(#" + id + ")");
-    el.setAttribute("data-lg", key);
+    el.setAttribute("data-lg", id);
+    el.setAttribute("data-lg-size", key);
   }
 
   /* ─────────── пружинное желе ─────────── */
