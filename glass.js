@@ -73,8 +73,12 @@
 
   var svgDefs = null;
   var made = {};
-  var madeCount = 0;
-  var MAX_FILTERS = 24;
+  var filterSerial = 0;
+  var LENS_SIZE = 320;
+  var LENS_RADIUS = LENS_SIZE / 2;
+  var LENS_SCALE = 155;
+  var lensImages = {};
+  var lensMapUrl = null;
 
   function ensureDefs() {
     if (svgDefs) return svgDefs;
@@ -113,18 +117,80 @@
   function resetFilters() {
     if (svgDefs) while (svgDefs.firstChild) svgDefs.removeChild(svgDefs.firstChild);
     made = {};
-    madeCount = 0;
+    filterSerial = 0;
     var nodes = document.querySelectorAll(SEL);
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].removeAttribute("data-lg");
+      nodes[i].removeAttribute("data-lg-size");
       nodes[i].style.removeProperty("--lg-refract");
+      nodes[i].style.removeProperty("--lg-shape-refract");
     }
   }
 
-  function filterFor(w, h) {
-    var id = "lg-" + w + "x" + h;
-    if (made[id]) return id;
-    if (madeCount >= MAX_FILTERS) resetFilters();
+
+  /* Радиальная карта создаётся один раз. Это не DOM-лупа:
+     карта входит в SVG displacement filter самого стекла и двигается
+     внутри фильтра вслед за курсором. */
+  function makeLensMap() {
+    if (lensMapUrl) return lensMapUrl;
+    var canvas = document.createElement("canvas");
+    canvas.width = LENS_SIZE;
+    canvas.height = LENS_SIZE;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(LENS_SIZE, LENS_SIZE);
+    var d = img.data;
+    for (var y = 0; y < LENS_SIZE; y++) {
+      for (var x = 0; x < LENS_SIZE; x++) {
+        var dx = (x + 0.5 - LENS_RADIUS) / LENS_RADIUS;
+        var dy = (y + 0.5 - LENS_RADIUS) / LENS_RADIUS;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        var i = (y * LENS_SIZE + x) * 4;
+        /* Сильный convex bulge: максимум смещения на внутреннем кольце,
+           ноль в центре и на внешней границе для гладкого стыка с плоскостью. */
+        var t = Math.max(0, Math.min(1, (1 - r) / 0.56));
+        /* smootherstep: плавный вход и выход без заметного кольца */
+        t = t * t * t * (t * (t * 6 - 15) + 10);
+        var mag = Math.min(1, r * 1.25) * t * 0.82;
+        var inv = r > 0.0001 ? 1 / r : 0;
+        /* Вектор направлен к центру: выборка подтягивается внутрь,
+           из-за чего поверхность выглядит увеличенной и выпуклой. */
+        d[i] = Math.round(128 - dx * inv * mag * 112);
+        d[i + 1] = Math.round(128 - dy * inv * mag * 112);
+        d[i + 2] = 128;
+        d[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    lensMapUrl = canvas.toDataURL("image/png");
+    return lensMapUrl;
+  }
+
+  function updateLens(el, e) {
+    var id = el.getAttribute("data-lg");
+    var img = id && lensImages[id];
+    if (!img) return;
+    var r = el.getBoundingClientRect();
+    var sx = el.offsetWidth / (r.width || el.offsetWidth || 1);
+    var sy = el.offsetHeight / (r.height || el.offsetHeight || 1);
+    var x = (e.clientX - r.left) * sx;
+    var y = (e.clientY - r.top) * sy;
+    img.setAttribute("x", String(Math.round(x - LENS_RADIUS)));
+    img.setAttribute("y", String(Math.round(y - LENS_RADIUS)));
+  }
+
+  function hideLens(el) {
+    var id = el && el.getAttribute("data-lg");
+    var img = id && lensImages[id];
+    if (!img) return;
+    img.setAttribute("x", String(-LENS_SIZE * 2));
+    img.setAttribute("y", String(-LENS_SIZE * 2));
+  }
+
+  function filterFor(w, h, el) {
+    /* У каждого блока свой SVG filter и своя feImage-карта.
+       Нельзя делить фильтр только по размерам: иначе курсор одного
+       блока двигает общую карту и деформирует все блоки того же размера. */
+    var id = "lg-block-" + (++filterSerial);
 
     var bezel = Math.max(6, Math.min(BEZEL, h / 2 - 2));
     var url;
@@ -138,10 +204,10 @@
     f.setAttribute("id", id);
     f.setAttribute("filterUnits", "userSpaceOnUse");
     f.setAttribute("primitiveUnits", "userSpaceOnUse");
-    f.setAttribute("x", "0");
-    f.setAttribute("y", "0");
-    f.setAttribute("width", String(w));
-    f.setAttribute("height", String(h));
+    f.setAttribute("x", String(-LENS_RADIUS));
+    f.setAttribute("y", String(-LENS_RADIUS));
+    f.setAttribute("width", String(w + LENS_SIZE));
+    f.setAttribute("height", String(h + LENS_SIZE));
     f.setAttribute("color-interpolation-filters", "sRGB");
 
     var feImg = document.createElementNS(NS, "feImage");
@@ -153,19 +219,52 @@
     feImg.setAttribute("preserveAspectRatio", "none");
     feImg.setAttribute("result", "map");
 
-    var disp = document.createElementNS(NS, "feDisplacementMap");
-    disp.setAttribute("in", "SourceGraphic");
-    disp.setAttribute("in2", "map");
-    /* максимальное смещение = scale / 2 */
-    disp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
-    disp.setAttribute("xChannelSelector", "R");
-    disp.setAttribute("yChannelSelector", "G");
+    var edgeDisp = document.createElementNS(NS, "feDisplacementMap");
+    edgeDisp.setAttribute("in", "SourceGraphic");
+    edgeDisp.setAttribute("in2", "map");
+    edgeDisp.setAttribute("scale", String(Math.round(bezel * 0.58 * 2)));
+    edgeDisp.setAttribute("xChannelSelector", "R");
+    edgeDisp.setAttribute("yChannelSelector", "G");
+    edgeDisp.setAttribute("result", "edge");
+
+    /* Карта выпуклости встроена в тот же фильтр, что и стекло.
+       Нейтральный фон нужен, чтобы вне радиуса не было смещения. */
+    var neutral = document.createElementNS(NS, "feFlood");
+    neutral.setAttribute("flood-color", "rgb(128,128,128)");
+    neutral.setAttribute("flood-opacity", "1");
+    neutral.setAttribute("result", "neutral");
+
+    var lens = document.createElementNS(NS, "feImage");
+    lens.setAttribute("href", makeLensMap());
+    lens.setAttribute("x", String(-LENS_SIZE * 2));
+    lens.setAttribute("y", String(-LENS_SIZE * 2));
+    lens.setAttribute("width", String(LENS_SIZE));
+    lens.setAttribute("height", String(LENS_SIZE));
+    lens.setAttribute("preserveAspectRatio", "none");
+    lens.setAttribute("result", "lens");
+
+    var lensOnNeutral = document.createElementNS(NS, "feComposite");
+    lensOnNeutral.setAttribute("in", "lens");
+    lensOnNeutral.setAttribute("in2", "neutral");
+    lensOnNeutral.setAttribute("operator", "over");
+    lensOnNeutral.setAttribute("result", "cursorMap");
+
+    var cursorDisp = document.createElementNS(NS, "feDisplacementMap");
+    cursorDisp.setAttribute("in", "edge");
+    cursorDisp.setAttribute("in2", "cursorMap");
+    cursorDisp.setAttribute("scale", String(LENS_SCALE));
+    cursorDisp.setAttribute("xChannelSelector", "R");
+    cursorDisp.setAttribute("yChannelSelector", "G");
 
     f.appendChild(feImg);
-    f.appendChild(disp);
+    f.appendChild(edgeDisp);
+    f.appendChild(neutral);
+    f.appendChild(lens);
+    f.appendChild(lensOnNeutral);
+    f.appendChild(cursorDisp);
     ensureDefs().appendChild(f);
     made[id] = true;
-    madeCount++;
+    lensImages[id] = lens;
     return id;
   }
 
@@ -175,21 +274,25 @@
     var h = el.offsetHeight;
     if (w < 48 || h < 24) return; // вкладка скрыта
     var key = w + "x" + h;
-    if (el.getAttribute("data-lg") === key) return;
-    var id = filterFor(w, h);
+    if (el.getAttribute("data-lg-size") === key && el.getAttribute("data-lg")) return;
+    var id = filterFor(w, h, el);
     if (!id) return;
-    el.style.setProperty("--lg-refract", "url(#" + id + ")");
-    el.setAttribute("data-lg", key);
+    /* Важно: SVG-фильтр применяем к самому HTML-блоку.
+       Тогда SourceGraphic включает его фон, border и содержимое,
+       а не только псевдоэлемент блика или backdrop за блоком. */
+    el.style.setProperty("filter", "url(#" + id + ")");
+    el.setAttribute("data-lg", id);
+    el.setAttribute("data-lg-size", key);
   }
 
   /* ─────────── пружинное желе ─────────── */
 
   var CH = ["gx", "gy", "sx", "sy", "lx", "ly", "tz"];
   var REST = { gx: 0, gy: 0, sx: 1, sy: 1, lx: 28, ly: -10, tz: 1 };
-  var BASE_SX = 1.04; // блок набухает вширь немного, ввысь — заметно,
-  var BASE_SY = 1.3; // чтобы стекло заходило на соседние строки
-  var K = 0.17; // жёсткость пружины
-  var DAMP = 0.74; // затухание: меньше — больше «желе»
+  var BASE_SX = 1.025; // лёгкое расширение без заметного изменения габаритов
+  var BASE_SY = 1.08; // не накрываем соседние строки
+  var K = 0.12; // более мягкий разгон пружины
+  var DAMP = 0.82; // более длинное и плавное затухание
 
   var states = new WeakMap();
   var live = new Set();
@@ -227,7 +330,7 @@
     s.gx.t = s.nx * 10;
     s.gy.t = s.ny * 5;
     s.lx.t = (s.nx * 0.5 + 0.5) * 100;
-    s.ly.t = (s.ny * 0.5 + 0.5) * 100 - 28; // блик чуть выше курсора
+    s.ly.t = (s.ny * 0.5 + 0.5) * 100; // локальный блик совпадает с центром выпуклости
     s.tz.t = 1.06;
   }
 
@@ -308,6 +411,7 @@
     s.dvy = 0;
     el.classList.add("lg-on");
     refract(el);
+    updateLens(el, e);
     if (reduceMotion) return;
     track(el, s, e);
     live.add(el);
@@ -317,6 +421,7 @@
   function move(el, e) {
     if (reduceMotion) return;
     var s = stateOf(el);
+    updateLens(el, e);
     track(el, s, e);
     live.add(el);
     kick();
@@ -327,6 +432,7 @@
     if (!s) return;
     s.hover = false;
     s.press = false;
+    hideLens(el);
     if (reduceMotion) {
       el.classList.remove("lg-on");
       return;
