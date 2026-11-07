@@ -279,6 +279,10 @@
     if (!id) return;
     el.style.setProperty("--lg-refract", "url(#" + id + ")");
     el.style.setProperty("--lg-shape-refract", "url(#" + id + ")");
+    /* Важно: SVG-фильтр применяем к самому HTML-блоку.
+       Тогда SourceGraphic включает его фон, border и содержимое,
+       а не только псевдоэлемент блика или backdrop за блоком. */
+    el.style.setProperty("filter", "url(#" + id + ")");
     el.setAttribute("data-lg", id);
     el.setAttribute("data-lg-size", key);
   }
