@@ -75,6 +75,12 @@
   var made = {};
   var madeCount = 0;
   var MAX_FILTERS = 24;
+  var LENS_SIZE = 176;
+  var LENS_RADIUS = LENS_SIZE / 2;
+  var LENS_SCALE = 52;
+  var lensImages = {};
+  var filterSeq = 0;
+  var lensMapUrl = null;
 
   function ensureDefs() {
     if (svgDefs) return svgDefs;
@@ -113,18 +119,19 @@
   function resetFilters() {
     if (svgDefs) while (svgDefs.firstChild) svgDefs.removeChild(svgDefs.firstChild);
     made = {};
+    lensImages = {};
     madeCount = 0;
     var nodes = document.querySelectorAll(SEL);
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].removeAttribute("data-lg");
+      nodes[i].removeAttribute("data-lg-size");
       nodes[i].style.removeProperty("--lg-refract");
     }
   }
 
   function filterFor(w, h) {
-    var id = "lg-" + w + "x" + h;
-    if (made[id]) return id;
     if (madeCount >= MAX_FILTERS) resetFilters();
+    var id = "lg-" + w + "x" + h + "-" + (++filterSeq);
 
     var bezel = Math.max(6, Math.min(BEZEL, h / 2 - 2));
     var url;
@@ -153,18 +160,52 @@
     feImg.setAttribute("preserveAspectRatio", "none");
     feImg.setAttribute("result", "map");
 
-    var disp = document.createElementNS(NS, "feDisplacementMap");
-    disp.setAttribute("in", "SourceGraphic");
-    disp.setAttribute("in2", "map");
-    /* максимальное смещение = scale / 2 */
-    disp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
-    disp.setAttribute("xChannelSelector", "R");
-    disp.setAttribute("yChannelSelector", "G");
+    var edgeDisp = document.createElementNS(NS, "feDisplacementMap");
+    edgeDisp.setAttribute("in", "SourceGraphic");
+    edgeDisp.setAttribute("in2", "map");
+    edgeDisp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
+    edgeDisp.setAttribute("xChannelSelector", "R");
+    edgeDisp.setAttribute("yChannelSelector", "G");
+    edgeDisp.setAttribute("result", "edge");
+
+    /* Нейтральная карта + подвижная радиальная карта курсора.
+       Деформация локальная: соседние участки блока не масштабируются целиком. */
+    var neutral = document.createElementNS(NS, "feFlood");
+    neutral.setAttribute("flood-color", "rgb(128,128,128)");
+    neutral.setAttribute("flood-opacity", "1");
+    neutral.setAttribute("result", "neutral");
+
+    var lens = document.createElementNS(NS, "feImage");
+    lens.setAttribute("href", makeLensMap());
+    lens.setAttribute("x", String(-LENS_SIZE * 2));
+    lens.setAttribute("y", String(-LENS_SIZE * 2));
+    lens.setAttribute("width", String(LENS_SIZE));
+    lens.setAttribute("height", String(LENS_SIZE));
+    lens.setAttribute("preserveAspectRatio", "none");
+    lens.setAttribute("result", "lens");
+
+    var composite = document.createElementNS(NS, "feComposite");
+    composite.setAttribute("in", "lens");
+    composite.setAttribute("in2", "neutral");
+    composite.setAttribute("operator", "over");
+    composite.setAttribute("result", "cursorMap");
+
+    var cursorDisp = document.createElementNS(NS, "feDisplacementMap");
+    cursorDisp.setAttribute("in", "edge");
+    cursorDisp.setAttribute("in2", "cursorMap");
+    cursorDisp.setAttribute("scale", String(LENS_SCALE));
+    cursorDisp.setAttribute("xChannelSelector", "R");
+    cursorDisp.setAttribute("yChannelSelector", "G");
 
     f.appendChild(feImg);
-    f.appendChild(disp);
+    f.appendChild(edgeDisp);
+    f.appendChild(neutral);
+    f.appendChild(lens);
+    f.appendChild(composite);
+    f.appendChild(cursorDisp);
     ensureDefs().appendChild(f);
     made[id] = true;
+    lensImages[id] = lens;
     madeCount++;
     return id;
   }
@@ -175,11 +216,12 @@
     var h = el.offsetHeight;
     if (w < 48 || h < 24) return; // вкладка скрыта
     var key = w + "x" + h;
-    if (el.getAttribute("data-lg") === key) return;
+    if (el.getAttribute("data-lg-size") === key && el.getAttribute("data-lg")) return;
     var id = filterFor(w, h);
     if (!id) return;
     el.style.setProperty("--lg-refract", "url(#" + id + ")");
-    el.setAttribute("data-lg", key);
+    el.setAttribute("data-lg", id);
+    el.setAttribute("data-lg-size", key);
   }
 
   /* ─────────── пружинное желе ─────────── */
@@ -310,6 +352,7 @@
     refract(el);
     if (reduceMotion) return;
     track(el, s, e);
+    updateLens(el, e);
     live.add(el);
     kick();
   }
@@ -318,6 +361,7 @@
     if (reduceMotion) return;
     var s = stateOf(el);
     track(el, s, e);
+    updateLens(el, e);
     live.add(el);
     kick();
   }
@@ -327,6 +371,7 @@
     if (!s) return;
     s.hover = false;
     s.press = false;
+    hideLens(el);
     if (reduceMotion) {
       el.classList.remove("lg-on");
       return;
