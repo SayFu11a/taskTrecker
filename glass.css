@@ -58,7 +58,7 @@
   border-radius: inherit;
   padding: 1.5px;
   opacity: 0.85;
-  filter: none;
+  filter: none; /* преломляется backdrop самого блока, не декоративная кромка */
   transition: opacity 0.3s ease;
   background: conic-gradient(
     from 200deg at 50% 50%,
@@ -90,6 +90,15 @@
   box-shadow: none;
   transition: opacity 0.3s ease;
   background:
+    radial-gradient(
+      ellipse 172px 118px at var(--lx, 28%) var(--ly, 28%),
+      rgba(255, 255, 255, 0.34) 0%,
+      rgba(255, 255, 255, 0.18) 13%,
+      rgba(255, 221, 170, 0.09) 32%,
+      rgba(0, 0, 0, 0.10) 52%,
+      rgba(0, 0, 0, 0.035) 66%,
+      transparent 78%
+    ),
     radial-gradient(
       140% 85% at var(--lx, 28%) var(--ly, -10%),
       rgba(255, 255, 255, 0.3),
