@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "rm -rf public && mkdir -p public && cp index.html styles.css app.js glass.css glass.js data.js namaz.js sound.js achievements.js sync.js push.js sw.js manifest.json icon-192.png icon-512.png icon-maskable-512.png public/",
+  "buildCommand": "rm -rf public && mkdir -p public && cp index.html styles.css app.js glass.css glass.js data.js namaz.js sound.js achievements.js sync.js tabsync.js push.js sw.js manifest.json icon-192.png icon-512.png icon-maskable-512.png public/",
   "installCommand": null,
   "outputDirectory": ".",
   "headers": [

@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v32";
+const VERSION = "vp-tracker-v34";
 const SHELL = [
   "./",
   "./index.html",
@@ -14,6 +14,7 @@ const SHELL = [
   "./sound.js",
   "./achievements.js",
   "./sync.js",
+  "./tabsync.js",
   "./push.js",
   "./manifest.json",
   "./icon-192.png",
