@@ -1,7 +1,7 @@
 /* Service worker: офлайн-кэш + приём push.
    Без сборки и зависимостей — файлы сайта кэшируются как есть. */
 
-const VERSION = "vp-tracker-v33-bulge";
+const VERSION = "vp-tracker-v34-cursor-bulge";
 const SHELL = [
   "./",
   "./index.html",
@@ -11,8 +11,6 @@ const SHELL = [
   "./app.js",
   "./glass.css",
   "./glass.js",
-  "./namaz-bulge.css",
-  "./namaz-bulge.js",
   "./sound.js",
   "./achievements.js",
   "./sync.js",
