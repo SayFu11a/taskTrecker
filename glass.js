@@ -76,7 +76,7 @@
   var filterSerial = 0;
   var LENS_SIZE = 320;
   var LENS_RADIUS = LENS_SIZE / 2;
-  var LENS_SCALE = 220;
+  var LENS_SCALE = 155;
   var lensImages = {};
   var lensMapUrl = null;
 
@@ -147,9 +147,10 @@
         var i = (y * LENS_SIZE + x) * 4;
         /* Сильный convex bulge: максимум смещения на внутреннем кольце,
            ноль в центре и на внешней границе для гладкого стыка с плоскостью. */
-        var t = Math.max(0, Math.min(1, (1 - r) / 0.34));
-        t = t * t * (3 - 2 * t);
-        var mag = Math.min(1, r * 1.5) * t * 0.95;
+        var t = Math.max(0, Math.min(1, (1 - r) / 0.56));
+        /* smootherstep: плавный вход и выход без заметного кольца */
+        t = t * t * t * (t * (t * 6 - 15) + 10);
+        var mag = Math.min(1, r * 1.25) * t * 0.82;
         var inv = r > 0.0001 ? 1 / r : 0;
         /* Вектор направлен к центру: выборка подтягивается внутрь,
            из-за чего поверхность выглядит увеличенной и выпуклой. */
@@ -221,7 +222,7 @@
     var edgeDisp = document.createElementNS(NS, "feDisplacementMap");
     edgeDisp.setAttribute("in", "SourceGraphic");
     edgeDisp.setAttribute("in2", "map");
-    edgeDisp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
+    edgeDisp.setAttribute("scale", String(Math.round(bezel * 0.58 * 2)));
     edgeDisp.setAttribute("xChannelSelector", "R");
     edgeDisp.setAttribute("yChannelSelector", "G");
     edgeDisp.setAttribute("result", "edge");
@@ -288,10 +289,10 @@
 
   var CH = ["gx", "gy", "sx", "sy", "lx", "ly", "tz"];
   var REST = { gx: 0, gy: 0, sx: 1, sy: 1, lx: 28, ly: -10, tz: 1 };
-  var BASE_SX = 1.04; // блок набухает вширь немного, ввысь — заметно,
-  var BASE_SY = 1.3; // чтобы стекло заходило на соседние строки
-  var K = 0.17; // жёсткость пружины
-  var DAMP = 0.74; // затухание: меньше — больше «желе»
+  var BASE_SX = 1.025; // лёгкое расширение без заметного изменения габаритов
+  var BASE_SY = 1.08; // не накрываем соседние строки
+  var K = 0.12; // более мягкий разгон пружины
+  var DAMP = 0.82; // более длинное и плавное затухание
 
   var states = new WeakMap();
   var live = new Set();
