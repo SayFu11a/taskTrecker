@@ -75,6 +75,11 @@
   var made = {};
   var madeCount = 0;
   var MAX_FILTERS = 24;
+  var LENS_SIZE = 320;
+  var LENS_RADIUS = LENS_SIZE / 2;
+  var LENS_SCALE = 220;
+  var lensImages = {};
+  var lensMapUrl = null;
 
   function ensureDefs() {
     if (svgDefs) return svgDefs;
@@ -117,8 +122,68 @@
     var nodes = document.querySelectorAll(SEL);
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].removeAttribute("data-lg");
+      nodes[i].removeAttribute("data-lg-size");
       nodes[i].style.removeProperty("--lg-refract");
+      nodes[i].style.removeProperty("--lg-shape-refract");
     }
+  }
+
+
+  /* Радиальная карта создаётся один раз. Это не DOM-лупа:
+     карта входит в SVG displacement filter самого стекла и двигается
+     внутри фильтра вслед за курсором. */
+  function makeLensMap() {
+    if (lensMapUrl) return lensMapUrl;
+    var canvas = document.createElement("canvas");
+    canvas.width = LENS_SIZE;
+    canvas.height = LENS_SIZE;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(LENS_SIZE, LENS_SIZE);
+    var d = img.data;
+    for (var y = 0; y < LENS_SIZE; y++) {
+      for (var x = 0; x < LENS_SIZE; x++) {
+        var dx = (x + 0.5 - LENS_RADIUS) / LENS_RADIUS;
+        var dy = (y + 0.5 - LENS_RADIUS) / LENS_RADIUS;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        var i = (y * LENS_SIZE + x) * 4;
+        /* Сильный convex bulge: максимум смещения на внутреннем кольце,
+           ноль в центре и на внешней границе для гладкого стыка с плоскостью. */
+        var t = Math.max(0, Math.min(1, (1 - r) / 0.34));
+        t = t * t * (3 - 2 * t);
+        var mag = Math.min(1, r * 1.5) * t * 0.95;
+        var inv = r > 0.0001 ? 1 / r : 0;
+        /* Вектор направлен к центру: выборка подтягивается внутрь,
+           из-за чего поверхность выглядит увеличенной и выпуклой. */
+        d[i] = Math.round(128 - dx * inv * mag * 112);
+        d[i + 1] = Math.round(128 - dy * inv * mag * 112);
+        d[i + 2] = 128;
+        d[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    lensMapUrl = canvas.toDataURL("image/png");
+    return lensMapUrl;
+  }
+
+  function updateLens(el, e) {
+    var id = el.getAttribute("data-lg");
+    var img = id && lensImages[id];
+    if (!img) return;
+    var r = el.getBoundingClientRect();
+    var sx = el.offsetWidth / (r.width || el.offsetWidth || 1);
+    var sy = el.offsetHeight / (r.height || el.offsetHeight || 1);
+    var x = (e.clientX - r.left) * sx;
+    var y = (e.clientY - r.top) * sy;
+    img.setAttribute("x", String(Math.round(x - LENS_RADIUS)));
+    img.setAttribute("y", String(Math.round(y - LENS_RADIUS)));
+  }
+
+  function hideLens(el) {
+    var id = el && el.getAttribute("data-lg");
+    var img = id && lensImages[id];
+    if (!img) return;
+    img.setAttribute("x", String(-LENS_SIZE * 2));
+    img.setAttribute("y", String(-LENS_SIZE * 2));
   }
 
   function filterFor(w, h) {
@@ -138,10 +203,10 @@
     f.setAttribute("id", id);
     f.setAttribute("filterUnits", "userSpaceOnUse");
     f.setAttribute("primitiveUnits", "userSpaceOnUse");
-    f.setAttribute("x", "0");
-    f.setAttribute("y", "0");
-    f.setAttribute("width", String(w));
-    f.setAttribute("height", String(h));
+    f.setAttribute("x", String(-LENS_RADIUS));
+    f.setAttribute("y", String(-LENS_RADIUS));
+    f.setAttribute("width", String(w + LENS_SIZE));
+    f.setAttribute("height", String(h + LENS_SIZE));
     f.setAttribute("color-interpolation-filters", "sRGB");
 
     var feImg = document.createElementNS(NS, "feImage");
@@ -153,18 +218,52 @@
     feImg.setAttribute("preserveAspectRatio", "none");
     feImg.setAttribute("result", "map");
 
-    var disp = document.createElementNS(NS, "feDisplacementMap");
-    disp.setAttribute("in", "SourceGraphic");
-    disp.setAttribute("in2", "map");
-    /* максимальное смещение = scale / 2 */
-    disp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
-    disp.setAttribute("xChannelSelector", "R");
-    disp.setAttribute("yChannelSelector", "G");
+    var edgeDisp = document.createElementNS(NS, "feDisplacementMap");
+    edgeDisp.setAttribute("in", "SourceGraphic");
+    edgeDisp.setAttribute("in2", "map");
+    edgeDisp.setAttribute("scale", String(Math.round(bezel * 0.9 * 2)));
+    edgeDisp.setAttribute("xChannelSelector", "R");
+    edgeDisp.setAttribute("yChannelSelector", "G");
+    edgeDisp.setAttribute("result", "edge");
+
+    /* Карта выпуклости встроена в тот же фильтр, что и стекло.
+       Нейтральный фон нужен, чтобы вне радиуса не было смещения. */
+    var neutral = document.createElementNS(NS, "feFlood");
+    neutral.setAttribute("flood-color", "rgb(128,128,128)");
+    neutral.setAttribute("flood-opacity", "1");
+    neutral.setAttribute("result", "neutral");
+
+    var lens = document.createElementNS(NS, "feImage");
+    lens.setAttribute("href", makeLensMap());
+    lens.setAttribute("x", String(-LENS_SIZE * 2));
+    lens.setAttribute("y", String(-LENS_SIZE * 2));
+    lens.setAttribute("width", String(LENS_SIZE));
+    lens.setAttribute("height", String(LENS_SIZE));
+    lens.setAttribute("preserveAspectRatio", "none");
+    lens.setAttribute("result", "lens");
+
+    var lensOnNeutral = document.createElementNS(NS, "feComposite");
+    lensOnNeutral.setAttribute("in", "lens");
+    lensOnNeutral.setAttribute("in2", "neutral");
+    lensOnNeutral.setAttribute("operator", "over");
+    lensOnNeutral.setAttribute("result", "cursorMap");
+
+    var cursorDisp = document.createElementNS(NS, "feDisplacementMap");
+    cursorDisp.setAttribute("in", "edge");
+    cursorDisp.setAttribute("in2", "cursorMap");
+    cursorDisp.setAttribute("scale", String(LENS_SCALE));
+    cursorDisp.setAttribute("xChannelSelector", "R");
+    cursorDisp.setAttribute("yChannelSelector", "G");
 
     f.appendChild(feImg);
-    f.appendChild(disp);
+    f.appendChild(edgeDisp);
+    f.appendChild(neutral);
+    f.appendChild(lens);
+    f.appendChild(lensOnNeutral);
+    f.appendChild(cursorDisp);
     ensureDefs().appendChild(f);
     made[id] = true;
+    lensImages[id] = lens;
     madeCount++;
     return id;
   }
@@ -175,11 +274,13 @@
     var h = el.offsetHeight;
     if (w < 48 || h < 24) return; // вкладка скрыта
     var key = w + "x" + h;
-    if (el.getAttribute("data-lg") === key) return;
+    if (el.getAttribute("data-lg-size") === key && el.getAttribute("data-lg")) return;
     var id = filterFor(w, h);
     if (!id) return;
     el.style.setProperty("--lg-refract", "url(#" + id + ")");
-    el.setAttribute("data-lg", key);
+    el.style.setProperty("--lg-shape-refract", "url(#" + id + ")");
+    el.setAttribute("data-lg", id);
+    el.setAttribute("data-lg-size", key);
   }
 
   /* ─────────── пружинное желе ─────────── */
@@ -227,7 +328,7 @@
     s.gx.t = s.nx * 10;
     s.gy.t = s.ny * 5;
     s.lx.t = (s.nx * 0.5 + 0.5) * 100;
-    s.ly.t = (s.ny * 0.5 + 0.5) * 100 - 28; // блик чуть выше курсора
+    s.ly.t = (s.ny * 0.5 + 0.5) * 100; // локальный блик совпадает с центром выпуклости
     s.tz.t = 1.06;
   }
 
@@ -308,6 +409,7 @@
     s.dvy = 0;
     el.classList.add("lg-on");
     refract(el);
+    updateLens(el, e);
     if (reduceMotion) return;
     track(el, s, e);
     live.add(el);
@@ -317,6 +419,7 @@
   function move(el, e) {
     if (reduceMotion) return;
     var s = stateOf(el);
+    updateLens(el, e);
     track(el, s, e);
     live.add(el);
     kick();
@@ -327,6 +430,7 @@
     if (!s) return;
     s.hover = false;
     s.press = false;
+    hideLens(el);
     if (reduceMotion) {
       el.classList.remove("lg-on");
       return;
