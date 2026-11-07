@@ -75,9 +75,9 @@
   var made = {};
   var madeCount = 0;
   var MAX_FILTERS = 24;
-  var LENS_SIZE = 192;
+  var LENS_SIZE = 320;
   var LENS_RADIUS = LENS_SIZE / 2;
-  var LENS_SCALE = 72;
+  var LENS_SCALE = 220;
   var lensImages = {};
   var lensMapUrl = null;
 
@@ -146,9 +146,11 @@
         var dy = (y + 0.5 - LENS_RADIUS) / LENS_RADIUS;
         var r = Math.sqrt(dx * dx + dy * dy);
         var i = (y * LENS_SIZE + x) * 4;
-        var t = Math.max(0, Math.min(1, (1 - r) / 0.28));
+        /* Сильный convex bulge: максимум смещения на внутреннем кольце,
+           ноль в центре и на внешней границе для гладкого стыка с плоскостью. */
+        var t = Math.max(0, Math.min(1, (1 - r) / 0.34));
         t = t * t * (3 - 2 * t);
-        var mag = Math.min(1, r * 1.35) * t * 0.82;
+        var mag = Math.min(1, r * 1.5) * t * 0.95;
         var inv = r > 0.0001 ? 1 / r : 0;
         /* Вектор направлен к центру: выборка подтягивается внутрь,
            из-за чего поверхность выглядит увеличенной и выпуклой. */
@@ -326,7 +328,7 @@
     s.gx.t = s.nx * 10;
     s.gy.t = s.ny * 5;
     s.lx.t = (s.nx * 0.5 + 0.5) * 100;
-    s.ly.t = (s.ny * 0.5 + 0.5) * 100 - 28; // блик чуть выше курсора
+    s.ly.t = (s.ny * 0.5 + 0.5) * 100; // локальный блик совпадает с центром выпуклости
     s.tz.t = 1.06;
   }
 
