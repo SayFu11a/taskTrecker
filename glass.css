@@ -126,6 +126,43 @@
     0 24px 40px -14px rgba(0, 0, 0, 0.7),
     0 0 30px rgba(255, 200, 112, 0.16);
 }
+/* ── искривление самого блока ──
+   glass.js кладёт в --lg-deform фильтр feDisplacementMap с радиальной картой,
+   которая едет за курсором: границы и содержимое выпячиваются от курсора и
+   плавно сходят на нет к краю зоны. Фильтр включается только на время наведения. */
+.timeline .tl-namaz.lg-on {
+  filter: var(--lg-deform, none);
+}
+
+/* ── свет и тень «купола» под курсором, чтобы поверхность читалась выпуклой ──
+   Блик сверху-слева, тень снизу-справа, общее осветление в центре.
+   --cx/--cy — центр выпуклости в координатах блока, --bump — её сила 0..1. */
+.timeline .tl-namaz.lg-on::after {
+  background:
+    radial-gradient(
+      circle 46px at calc(var(--cx, 50%) - 24px) calc(var(--cy, 50%) - 26px),
+      rgba(255, 255, 255, calc(0.5 * var(--bump, 0))),
+      rgba(255, 255, 255, 0) 100%
+    ),
+    radial-gradient(
+      circle 120px at calc(var(--cx, 50%) + 22px) calc(var(--cy, 50%) + 30px),
+      rgba(0, 0, 0, calc(0.3 * var(--bump, 0))),
+      rgba(0, 0, 0, 0) 100%
+    ),
+    radial-gradient(
+      circle 140px at var(--cx, 50%) var(--cy, 50%),
+      rgba(255, 238, 205, calc(0.16 * var(--bump, 0))),
+      rgba(255, 238, 205, 0) 100%
+    ),
+    radial-gradient(
+      140% 85% at var(--lx, 28%) var(--ly, -10%),
+      rgba(255, 255, 255, 0.3),
+      rgba(255, 255, 255, 0.06) 42%,
+      transparent 64%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 42%);
+}
+
 .timeline .tl-namaz:hover::before,
 .timeline .tl-namaz.is-lit::before,
 .timeline .tl-namaz.lg-on::before {

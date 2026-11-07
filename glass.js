@@ -76,9 +76,28 @@
     return [(-dx / dist) * g, (-dy / dist) * g];
   }
 
+  /* Выпуклость самого блока: радиальное смещение вокруг курсора, диаметр d.
+     Вектор смотрит к центру, значит содержимое и границы блока выпячиваются
+     от курсора. Профиль ρ·(1−ρ²)² даёт нулевую силу И нулевой наклон на краю
+     круга: переход к обычной плоской поверхности без излома. Нормировка
+     0.2862 — максимум функции (при ρ = 1/√5), длина вектора не больше 1. */
+  function bulgeAt(x, y, d) {
+    var c = d / 2;
+    var dx = x + 0.5 - c;
+    var dy = y + 0.5 - c;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var rho = dist / c;
+    if (!(rho > 0 && rho < 1)) return [0, 0];
+    var k = 1 - rho * rho;
+    var g = (rho * k * k) / 0.2862;
+    return [(-dx / dist) * g, (-dy / dist) * g];
+  }
+
   if (typeof document === "undefined") {
     /* запуск вне браузера (проверка математики в Node) */
-    if (typeof module !== "undefined" && module.exports) module.exports = { displacementAt: displacementAt, lensAt: lensAt };
+    if (typeof module !== "undefined" && module.exports) {
+      module.exports = { displacementAt: displacementAt, lensAt: lensAt, bulgeAt: bulgeAt };
+    }
     return;
   }
 
@@ -86,6 +105,13 @@
   var ua = navigator.userAgent || "";
   /* backdrop-filter с SVG-фильтром работает только в Chromium */
   var canRefract = /Chrome\/\d+/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+  /* Искривление самого блока: обычный filter: url(#…) на элементе, а не
+     backdrop-filter, поэтому в Firefox тоже работает. Safari (и все браузеры
+     iOS) выключены: там SVG-фильтры на HTML-элементах капризничают, и блок
+     мог бы пропасть. */
+  var canDeform = canRefract || /Firefox\/\d+/.test(ua);
+  /* Летающая линза поверх блока из прошлой версии. true — вернуть. */
+  var LENS_ON = false;
 
   /* ─────────── карта смещений и SVG-фильтр ─────────── */
 
@@ -129,7 +155,13 @@
   }
 
   function resetFilters() {
-    if (svgDefs) while (svgDefs.firstChild) svgDefs.removeChild(svgDefs.firstChild);
+    if (svgDefs) {
+      var old = svgDefs.querySelectorAll("filter");
+      for (var j = 0; j < old.length; j++) {
+        /* только фильтры кромки по размеру; линзу и деформацию не трогаем */
+        if (/^lg-\d+x\d+$/.test(old[j].getAttribute("id") || "")) svgDefs.removeChild(old[j]);
+      }
+    }
     made = {};
     madeCount = 0;
     var nodes = document.querySelectorAll(SEL);
@@ -200,10 +232,130 @@
     el.setAttribute("data-lg", key);
   }
 
+  /* ─────────── искривление самого блока ───────────
+     Вокруг курсора блок выпячивается: границы и содержимое смещаются от
+     курсора по радиальной карте и плавно сходят на нет к краю круга.
+     Работает через filter: url(#lgd-N) на самом .tl-namaz:
+       feFlood (нейтральный серый)  ← «ничего не смещать»
+       feImage (круглая карта выпуклости), её x/y ездят за курсором
+       feMerge → карта смещений → feDisplacementMap над SourceGraphic.
+     Сила выпуклости — это атрибут scale, его плавно крутит пружина.
+     Фильтр у каждого блока свой, чтобы затухание блока, который уже
+     покинули, не путалось с тем, на который перешли. */
+
+  var DEFORM_R = 140; // радиус зоны влияния, px
+  var DEFORM_MAX = 18; // макс. сдвиг пикселей у пика выпуклости, px
+  var DEFORM_PAD = 44; // запас вокруг блока, чтобы выпуклость не обрезалась
+
+  var deformUrl = null;
+  var deformSeq = 0;
+  var deformList = [];
+
+  function deformMap() {
+    if (deformUrl) return deformUrl;
+    var d = DEFORM_R * 2;
+    var canvas = document.createElement("canvas");
+    canvas.width = d;
+    canvas.height = d;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(d, d);
+    var data = img.data;
+    for (var y = 0; y < d; y++) {
+      for (var x = 0; x < d; x++) {
+        var v = bulgeAt(x, y, d);
+        var i = (y * d + x) * 4;
+        data[i] = Math.round(128 + v[0] * 127);
+        data[i + 1] = Math.round(128 + v[1] * 127);
+        data[i + 2] = 128;
+        data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    deformUrl = canvas.toDataURL("image/png");
+    return deformUrl;
+  }
+
+  function purgeDeform() {
+    deformList = deformList.filter(function (d) {
+      if (d.el.isConnected) return true;
+      if (d.f.parentNode) d.f.parentNode.removeChild(d.f);
+      return false;
+    });
+  }
+
+  function makeEl(name, attrs) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, String(attrs[k]));
+    return n;
+  }
+
+  /* готовит фильтр деформации под текущий размер блока */
+  function deformFor(el, s) {
+    if (!canDeform) return;
+    var w = el.offsetWidth; // размеры без transform
+    var h = el.offsetHeight;
+    if (w < 48 || h < 24) return;
+    var cur = s.dfm;
+    if (cur && cur.w === w && cur.h === h && cur.f.isConnected) return;
+
+    var url;
+    try {
+      url = deformMap();
+    } catch (err) {
+      return; // canvas запрещён — остаёмся без деформации
+    }
+    if (cur && cur.f.parentNode) cur.f.parentNode.removeChild(cur.f);
+    purgeDeform();
+
+    var id = "lgd-" + ++deformSeq;
+    var f = makeEl("filter", {
+      id: id,
+      filterUnits: "userSpaceOnUse",
+      primitiveUnits: "userSpaceOnUse",
+      x: -DEFORM_PAD,
+      y: -DEFORM_PAD,
+      width: w + DEFORM_PAD * 2,
+      height: h + DEFORM_PAD * 2,
+      "color-interpolation-filters": "sRGB"
+    });
+    var flood = makeEl("feFlood", { "flood-color": "rgb(128,128,128)", "flood-opacity": 1, result: "neutral" });
+    var img = makeEl("feImage", {
+      href: url,
+      x: w / 2 - DEFORM_R,
+      y: h / 2 - DEFORM_R,
+      width: DEFORM_R * 2,
+      height: DEFORM_R * 2,
+      preserveAspectRatio: "none",
+      result: "bump"
+    });
+    var merge = makeEl("feMerge", { result: "map" });
+    merge.appendChild(makeEl("feMergeNode", { in: "neutral" }));
+    merge.appendChild(makeEl("feMergeNode", { in: "bump" }));
+    var disp = makeEl("feDisplacementMap", {
+      in: "SourceGraphic",
+      in2: "map",
+      scale: 0,
+      xChannelSelector: "R",
+      yChannelSelector: "G"
+    });
+    f.appendChild(flood);
+    f.appendChild(img);
+    f.appendChild(merge);
+    f.appendChild(disp);
+    ensureDefs().appendChild(f);
+
+    s.dfm = { f: f, img: img, disp: disp, w: w, h: h, el: el };
+    deformList.push(s.dfm);
+    el.style.setProperty("--lg-deform", "url(#" + id + ")");
+  }
+
   /* ─────────── пружинное желе ─────────── */
 
-  var CH = ["gx", "gy", "sx", "sy", "lx", "ly", "tz"];
-  var REST = { gx: 0, gy: 0, sx: 1, sy: 1, lx: 28, ly: -10, tz: 1 };
+  /* bp — сила выпуклости 0..1, cx/cy — центр выпуклости в координатах блока, px */
+  var CH = ["gx", "gy", "sx", "sy", "lx", "ly", "tz", "bp", "cx", "cy"];
+  var REST = { gx: 0, gy: 0, sx: 1, sy: 1, lx: 28, ly: -10, tz: 1, bp: 0, cx: 0, cy: 0 };
+  var KS = { cx: 0.3, cy: 0.3 }; // центр выпуклости ходит за курсором быстрее остального
+  var DS = { cx: 0.68, cy: 0.68 };
   var BASE_SX = 1.04; // блок набухает вширь немного, ввысь — заметно,
   var BASE_SY = 1.3; // чтобы стекло заходило на соседние строки
   var K = 0.17; // жёсткость пружины
@@ -217,7 +369,10 @@
   function stateOf(el) {
     var s = states.get(el);
     if (!s) {
-      s = { hover: false, press: false, nx: 0, ny: 0, lastX: 0, lastY: 0, hasLast: false, dvx: 0, dvy: 0 };
+      s = {
+        hover: false, press: false, nx: 0, ny: 0, px: 0, py: 0,
+        lastX: 0, lastY: 0, hasLast: false, dvx: 0, dvy: 0, dfm: null
+      };
       CH.forEach(function (k) {
         s[k] = { p: REST[k], v: 0, t: REST[k] };
       });
@@ -233,7 +388,8 @@
   function retarget(s) {
     if (!s.hover) {
       CH.forEach(function (k) {
-        s[k].t = REST[k];
+        /* выпуклость гаснет на месте, а не уезжает в угол */
+        s[k].t = k === "cx" || k === "cy" ? s[k].p : REST[k];
       });
       return;
     }
@@ -247,6 +403,9 @@
     s.lx.t = (s.nx * 0.5 + 0.5) * 100;
     s.ly.t = (s.ny * 0.5 + 0.5) * 100 - 28; // блик чуть выше курсора
     s.tz.t = 1.06;
+    s.bp.t = s.press ? 1.2 : 1; // нажатие давит сильнее
+    s.cx.t = s.px;
+    s.cy.t = s.py;
   }
 
   function write(el, s) {
@@ -258,10 +417,20 @@
     st.setProperty("--lx", s.lx.p.toFixed(1) + "%");
     st.setProperty("--ly", s.ly.p.toFixed(1) + "%");
     st.setProperty("--tz", s.tz.p.toFixed(4));
+    var bp = Math.max(0, s.bp.p);
+    st.setProperty("--bump", bp.toFixed(3));
+    st.setProperty("--cx", s.cx.p.toFixed(1) + "px");
+    st.setProperty("--cy", s.cy.p.toFixed(1) + "px");
+    if (s.dfm) {
+      /* карта едет за курсором, сила выпуклости = scale (макс. сдвиг = scale / 2) */
+      s.dfm.img.setAttribute("x", (s.cx.p - DEFORM_R).toFixed(1));
+      s.dfm.img.setAttribute("y", (s.cy.p - DEFORM_R).toFixed(1));
+      s.dfm.disp.setAttribute("scale", (DEFORM_MAX * 2 * bp).toFixed(2));
+    }
   }
 
   function clearVars(el) {
-    ["--gx", "--gy", "--sx", "--sy", "--lx", "--ly", "--tz"].forEach(function (p) {
+    ["--gx", "--gy", "--sx", "--sy", "--lx", "--ly", "--tz", "--bump", "--cx", "--cy"].forEach(function (p) {
       el.style.removeProperty(p);
     });
   }
@@ -270,6 +439,8 @@
     raf = 0;
     live.forEach(function (el) {
       if (!el.isConnected) {
+        var gone = states.get(el);
+        if (gone && gone.dfm && gone.dfm.f.parentNode) gone.dfm.f.parentNode.removeChild(gone.dfm.f);
         live.delete(el);
         return;
       }
@@ -281,8 +452,8 @@
       var moving = false;
       CH.forEach(function (k) {
         var c = s[k];
-        c.v += (c.t - c.p) * K;
-        c.v *= DAMP;
+        c.v += (c.t - c.p) * (KS[k] || K);
+        c.v *= DS[k] || DAMP;
         c.p += c.v;
         if (Math.abs(c.v) > 0.002 || Math.abs(c.t - c.p) > 0.002) moving = true;
       });
@@ -310,6 +481,10 @@
     var cy = r.top + r.height / 2 - s.gy.p;
     s.nx = clamp((e.clientX - cx) / (el.offsetWidth / 2 || 1), -1, 1);
     s.ny = clamp((e.clientY - cy) / (el.offsetHeight / 2 || 1), -1, 1);
+    /* фильтр живёт в локальных координатах блока: снимаем с курсора
+       растяжение transform, иначе выпуклость уедет от мыши */
+    s.px = el.offsetWidth / 2 + (e.clientX - cx) / (s.sx.p || 1);
+    s.py = el.offsetHeight / 2 + (e.clientY - cy) / (s.sy.p || 1);
     if (s.hasLast) {
       s.dvx = clamp(e.clientX - s.lastX, -60, 60);
       s.dvy = clamp(e.clientY - s.lastY, -60, 60);
@@ -329,6 +504,11 @@
     refract(el);
     if (reduceMotion) return;
     track(el, s, e);
+    deformFor(el, s);
+    /* выпуклость вырастает на месте под курсором, а не едет из угла */
+    s.cx.p = s.cx.t = s.px;
+    s.cy.p = s.cy.t = s.py;
+    s.cx.v = s.cy.v = 0;
     live.add(el);
     kick();
   }
@@ -337,6 +517,7 @@
     if (reduceMotion) return;
     var s = stateOf(el);
     track(el, s, e);
+    deformFor(el, s); // дёшево: пересоздаёт фильтр только при смене размера
     live.add(el);
     kick();
   }
@@ -492,7 +673,7 @@
   }
 
   function lensFollow(e) {
-    if (reduceMotion || e.pointerType === "touch") return;
+    if (!LENS_ON || reduceMotion || e.pointerType === "touch") return;
     if (!ensureLens()) return;
     if (!lens.on) {
       /* появляемся сразу под курсором, а не «прилетаем» из прошлой точки */
