@@ -1,0 +1,208 @@
+/* ─────────── Liquid glass для блоков намаза ───────────
+   Подключать ПОСЛЕ styles.css. Старые стили золотого неона из styles.css
+   не удаляются, а перекрываются здесь (селекторы начинаются с .timeline,
+   поэтому они сильнее). Форму и растяжение считает glass.js через переменные:
+   --gx --gy  смещение к курсору, px
+   --sx --sy  растяжение по осям
+   --lx --ly  положение блика, %
+   --tz       небольшое увеличение текста
+   --lg-refract  url(#фильтр) с картой преломления (только Chromium) */
+
+/* старые слои неона, лучей и капли-лупы больше не нужны */
+.timeline .tl-namaz > .tl-namaz-edge,
+.timeline .tl-namaz > .tl-namaz-glow,
+.namaz-drop,
+.namaz-glow-layer {
+  display: none !important;
+}
+
+/* ── сам блок: полупрозрачное стекло с каплей золота ── */
+.timeline .tl-namaz {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px; /* то же число в RADIUS в glass.js */
+  color: #fff1d8;
+  animation: none;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 214, 140, 0.16) 0%,
+      rgba(255, 255, 255, 0.07) 36%,
+      rgba(255, 255, 255, 0.03) 64%,
+      rgba(255, 192, 104, 0.1) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 22px rgba(255, 255, 255, 0.05),
+    0 10px 26px -10px rgba(0, 0, 0, 0.6),
+    0 0 22px rgba(255, 200, 112, 0.1);
+  transform: translate3d(var(--gx, 0px), var(--gy, 0px), 0) scale(var(--sx, 1), var(--sy, 1));
+  transition:
+    box-shadow 0.35s ease,
+    background 0.35s ease,
+    border-color 0.35s ease;
+  will-change: transform;
+}
+
+/* кромка-блик: яркая сверху-слева, тёплая снизу-справа */
+.timeline .tl-namaz::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.5px;
+  opacity: 0.85;
+  filter: none;
+  transition: opacity 0.3s ease;
+  background: conic-gradient(
+    from 200deg at 50% 50%,
+    rgba(255, 255, 255, 0.9),
+    rgba(255, 255, 255, 0.08) 20%,
+    rgba(255, 214, 150, 0.4) 46%,
+    rgba(255, 255, 255, 0.06) 64%,
+    rgba(255, 255, 255, 0.75) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* глянец: блик, который едет за курсором */
+.timeline .tl-namaz::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 1;
+  box-shadow: none;
+  transition: opacity 0.3s ease;
+  background:
+    radial-gradient(
+      140% 85% at var(--lx, 28%) var(--ly, -10%),
+      rgba(255, 255, 255, 0.3),
+      rgba(255, 255, 255, 0.06) 42%,
+      transparent 64%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 42%);
+}
+
+/* ── при наведении: стекло включает размытие и преломление фона ──
+   Без JS (или при reduced-motion) блок просто набухает по CSS. */
+.timeline .tl-namaz:hover,
+.timeline .tl-namaz.is-lit,
+.timeline .tl-namaz.lg-on,
+.timeline .tl-namaz:focus-visible {
+  --sx: 1.04;
+  --sy: 1.3;
+  z-index: 20;
+  border-color: rgba(255, 255, 255, 0.34);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 220, 156, 0.2) 0%,
+      rgba(255, 255, 255, 0.1) 38%,
+      rgba(255, 255, 255, 0.05) 64%,
+      rgba(255, 196, 110, 0.14) 100%
+    );
+  -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.14);
+  backdrop-filter: var(--lg-refract, blur(0px)) blur(6px) saturate(1.8) brightness(1.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -2px 6px rgba(255, 255, 255, 0.12),
+    inset 0 0 30px rgba(255, 236, 200, 0.1),
+    0 24px 40px -14px rgba(0, 0, 0, 0.7),
+    0 0 30px rgba(255, 200, 112, 0.16);
+}
+.timeline .tl-namaz:hover::before,
+.timeline .tl-namaz.is-lit::before,
+.timeline .tl-namaz.lg-on::before {
+  opacity: 1;
+}
+.timeline .tl-namaz:hover::after,
+.timeline .tl-namaz.is-lit::after,
+.timeline .tl-namaz.lg-on::after {
+  opacity: 1;
+}
+
+.timeline .tl-namaz:focus-visible {
+  outline: 2px solid rgba(255, 228, 170, 0.85);
+  outline-offset: 3px;
+}
+
+/* ── содержимое: не растягивается вместе со стеклом ──
+   Контр-масштаб гасит --sx/--sy, поэтому текст остаётся ровным,
+   а --tz даёт ему лёгкое увеличение. */
+.timeline .tl-namaz > .tl-namaz-steps,
+.timeline .tl-namaz > .tl-namaz-main,
+.timeline .tl-namaz > .tl-namaz-scale {
+  position: relative;
+  z-index: 3;
+  transform: scale(calc(var(--tz, 1) / var(--sx, 1)), calc(var(--tz, 1) / var(--sy, 1)));
+}
+.timeline .tl-namaz > .tl-namaz-now {
+  z-index: 3;
+}
+
+.timeline .tl-namaz .tl-namaz-title {
+  color: #fff1d8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.timeline .tl-namaz .tl-namaz-times b {
+  color: #ffe2a8;
+}
+.timeline .tl-namaz .tl-namaz-times small,
+.timeline .tl-namaz .tl-namaz-scale {
+  color: rgba(255, 240, 214, 0.78);
+}
+.timeline .tl-namaz .tl-namaz-scale .mid {
+  color: #ffe2a8;
+}
+.timeline .tl-namaz:hover .tl-namaz-title,
+.timeline .tl-namaz.lg-on .tl-namaz-title {
+  color: #fffaf0;
+}
+
+/* состояния блока */
+.timeline .tl-namaz.is-now {
+  border-color: rgba(255, 232, 178, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 26px -10px rgba(0, 0, 0, 0.6),
+    0 0 26px rgba(255, 204, 116, 0.32);
+}
+.timeline .tl-namaz.is-done {
+  border-color: rgba(150, 240, 214, 0.5);
+}
+.timeline .tl-namaz.is-done .tl-namaz-title {
+  color: #c2f7e6;
+}
+.timeline .tl-namaz.is-past {
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline .tl-namaz {
+    transition: none;
+  }
+  .timeline .tl-namaz:hover,
+  .timeline .tl-namaz.is-lit,
+  .timeline .tl-namaz.lg-on,
+  .timeline .tl-namaz:focus-visible {
+    --sx: 1;
+    --sy: 1;
+  }
+}
