@@ -74,9 +74,9 @@
   var svgDefs = null;
   var made = {};
   var filterSerial = 0;
-  var LENS_SIZE = 320;
+  var LENS_SIZE = 512;
   var LENS_RADIUS = LENS_SIZE / 2;
-  var LENS_SCALE = 155;
+  var LENS_SCALE = 72;
   var lensImages = {};
   var lensMapUrl = null;
 
@@ -147,10 +147,10 @@
         var i = (y * LENS_SIZE + x) * 4;
         /* Сильный convex bulge: максимум смещения на внутреннем кольце,
            ноль в центре и на внешней границе для гладкого стыка с плоскостью. */
-        var t = Math.max(0, Math.min(1, (1 - r) / 0.56));
+        var t = Math.max(0, Math.min(1, (1 - r) / 0.68));
         /* smootherstep: плавный вход и выход без заметного кольца */
         t = t * t * t * (t * (t * 6 - 15) + 10);
-        var mag = Math.min(1, r * 1.25) * t * 0.82;
+        var mag = Math.min(1, r * 1.15) * t * 0.78;
         var inv = r > 0.0001 ? 1 / r : 0;
         /* Вектор направлен к центру: выборка подтягивается внутрь,
            из-за чего поверхность выглядит увеличенной и выпуклой. */
