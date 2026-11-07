@@ -45,7 +45,7 @@
     box-shadow 0.35s ease,
     background 0.35s ease,
     border-color 0.35s ease;
-  will-change: transform;
+  will-change: transform, filter;
 }
 
 /* кромка-блик: яркая сверху-слева, тёплая снизу-справа */
@@ -58,7 +58,7 @@
   border-radius: inherit;
   padding: 1.5px;
   opacity: 0.85;
-  filter: none; /* преломляется backdrop самого блока, не декоративная кромка */
+  filter: none; /* геометрию деформирует SVG-фильтр на самом .tl-namaz */
   transition: opacity 0.3s ease;
   background: conic-gradient(
     from 200deg at 50% 50%,
@@ -127,7 +127,7 @@
       rgba(255, 196, 110, 0.14) 100%
     );
   -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.14);
-  backdrop-filter: var(--lg-refract, blur(0px)) blur(6px) saturate(1.8) brightness(1.14);
+  backdrop-filter: blur(6px) saturate(1.8) brightness(1.14);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.75),
     inset 0 -2px 6px rgba(255, 255, 255, 0.12),
