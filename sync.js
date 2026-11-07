@@ -150,13 +150,19 @@ function normalizeDayForDb(day) {
     if (!rec) return;
     const min = Number(rec.min) || 0;
     const startedAt = rec.timer && rec.timer.startedAt;
-    if (!min && !startedAt) return;
+    /* Ноль минут — это тоже правка («удалил часы»): её нельзя выбрасывать,
+       иначе удаление не доедет до сервера и вернётся с другого устройства. */
+    const minAt = Number(rec.minAt) || 0;
+    if (!min && !startedAt && !minAt && !rec.stoppedAt) return;
     out[id] = { min };
     if (startedAt) {
       out[id].timer = { startedAt };
       /* отметку поставил сервер — другим устройствам это важно знать */
       if (rec.timer && rec.timer.byServer) out[id].timer.byServer = true;
     }
+    /* когда меняли минуты — по этому полю договариваются устройства */
+    if (minAt) out[id].minAt = minAt;
+    if (rec.stoppedAt) out[id].stoppedAt = rec.stoppedAt;
   });
   return out;
 }
@@ -196,7 +202,7 @@ function mergeGym(localGym, remoteGym) {
   return out;
 }
 
-function mergeDay(localDay, remoteDay) {
+function mergeDay(localDay, remoteDay, localAt, remoteAt) {
   const out = {};
   const local = localDay || {};
   const remote = remoteDay || {};
@@ -207,7 +213,18 @@ function mergeDay(localDay, remoteDay) {
     const b = remote[id]; // серверный
     const aMin = typeof a === "number" ? a : (a && Number(a.min)) || 0;
     const bMin = typeof b === "number" ? b : (b && Number(b.min)) || 0;
-    const min = Math.max(aMin, bMin); // большее время не теряем
+
+    /* Минуты: побеждает ПОСЛЕДНЯЯ правка, а не большее число.
+       Раньше стояло Math.max, и удаление («−» или «своё: -120») не могло
+       доехать до сервера: телефон отдавал старое большее число, оно
+       возвращалось, и стёртые часы появлялись снова при каждой синхронизации.
+       Отметки нет только у старых записей — для них оставляем max. */
+    const aAt = Number(a && a.minAt) || Number((localAt || {})[id]) || 0;
+    const bAt = Number(b && b.minAt) || Number((remoteAt || {})[id]) || 0;
+    let min;
+    if (aAt && bAt && aAt !== bAt) min = aAt > bAt ? aMin : bMin;
+    else min = aAt || bAt ? (aAt >= bAt ? aMin : bMin) : Math.max(aMin, bMin);
+    const minAt = Math.max(aAt, bAt) || 0;
     const aTimer = a && a.timer && a.timer.startedAt;
     const bTimer = b && b.timer && b.timer.startedAt;
     /* если таймер идёт на двух устройствах — берём тот, что раньше начался */
@@ -223,13 +240,13 @@ function mergeDay(localDay, remoteDay) {
     const stoppedAt = stops.length ? Math.max(...stops) : null;
     const isOff = stoppedAt && (!startedAt || stoppedAt >= startedAt);
 
-    if (!min && !startedAt && !stoppedAt) return;
+    if (!min && !startedAt && !stoppedAt && !minAt) return;
     if (isOff) out[id] = { min, stoppedAt: new Date(stoppedAt).toISOString() };
     else if (startedAt) {
       out[id] = { min, timer: { startedAt: new Date(startedAt).toISOString() } };
       if (byServer) out[id].timer.byServer = true;
-    }
-    else out[id] = { min };
+    } else out[id] = { min };
+    if (minAt) out[id].minAt = minAt;
   });
 
   return out;
@@ -254,8 +271,20 @@ function mergeRowsIntoState(rows) {
       remoteHours = hoursFromLegacyLevels(row.blocks);
     }
 
-    const merged = mergeDay(state.hours[row.date], remoteHours);
-    if (Object.keys(merged).length) state.hours[row.date] = merged;
+    /* отметки правок передаём отдельно: сервер держит их в hours[*].minAt,
+       а старые записи — вне «hours», тогда сработает max */
+    const merged = mergeDay(state.hours[row.date], remoteHours, (state.minAt || {})[row.date], null);
+    if (Object.keys(merged).length) {
+      state.hours[row.date] = merged;
+      /* поднимаем отметки в state.minAt — по ним решается, чья правка свежее */
+      if (!state.minAt) state.minAt = {};
+      const dayAt = state.minAt[row.date] || (state.minAt[row.date] = {});
+      Object.keys(merged).forEach((id) => {
+        const at = Number(merged[id] && merged[id].minAt) || 0;
+        if (at > (Number(dayAt[id]) || 0)) dayAt[id] = at;
+      });
+      if (!Object.keys(dayAt).length) delete state.minAt[row.date];
+    }
 
     /* meta двигаем только если сервер реально новее — иначе локальная
        правка перетрёт следующую отправку своим «старым» временем */
@@ -297,6 +326,18 @@ async function pullThenPush() {
 
 async function pushAll() {
   if (!sb || !session) return;
+
+  /* Если таймер только что остановила база, она уже записала минуты в день.
+     Пуш со старым (меньшим) числом затёр бы их — поэтому сначала забираем
+     день с сервера, потом отправляем. */
+  if (typeof timerSyncFromServer === "function" && typeof srvTimer === "object") {
+    try {
+      await timerSyncFromServer();
+    } catch {
+      /* не критично: ниже отправим то, что есть */
+    }
+  }
+
   const rows = stateToRows(session.user.id);
   if (!rows.length) return;
 
