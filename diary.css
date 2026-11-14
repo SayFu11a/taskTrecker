@@ -1,0 +1,260 @@
+/* ─────────── Дневник: стили вкладки ───────────
+   Опирается на переменные из styles.css (--accent, --line, --card…), своих цветов не вводит. */
+
+#panel-diary textarea {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 12px 14px;
+  outline: none;
+  resize: vertical;
+  transition: 0.16s;
+}
+#panel-diary textarea:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(124, 108, 255, 0.16); }
+#panel-diary textarea::placeholder { color: #626880; }
+
+/* подвкладки: Запись / Цели */
+.dy-sub { display: flex; gap: 4px; margin: 0 0 14px; }
+.dy-sub-btn {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: 0.16s;
+}
+.dy-sub-btn:hover { color: var(--text); border-color: var(--line-strong); }
+.dy-sub-btn.on { background: var(--accent); border-color: var(--accent); color: #0d1004; }
+.dy-sub-btn .dy-count-badge { margin-left: 6px; opacity: 0.75; font-weight: 500; }
+
+/* панель даты */
+.dy-datebar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.dy-datebar input[type="date"] { color-scheme: dark; min-width: 150px; }
+.dy-link {
+  border: 0; background: none; color: var(--accent-3); font: inherit; font-size: 12.5px;
+  cursor: pointer; padding: 4px 6px; text-decoration: underline dotted;
+}
+.dy-link:hover { color: var(--text); }
+.dy-datetitle { font-size: 13px; color: var(--muted); }
+
+/* индикатор сохранения */
+.dy-status {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+}
+.dy-status::before {
+  content: "";
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted); opacity: 0.7;
+}
+.dy-status.saving::before { background: #ffb56b; animation: pulse 1.2s ease-in-out infinite; }
+.dy-status.synced::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); opacity: 1; }
+.dy-status.pending::before { background: var(--accent-2); opacity: 1; }
+.dy-status.error { color: #ffb4a8; }
+.dy-status.error::before { background: var(--bad); opacity: 1; }
+
+.dy-label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 7px; }
+.dy-count { text-align: right; font-size: 11px; color: var(--muted); margin: 4px 2px 0; font-variant-numeric: tabular-nums; }
+
+.dy-details { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
+.dy-details > summary { cursor: pointer; padding: 10px 14px; font-size: 13px; color: #b9bfd0; list-style: none; }
+.dy-details > summary::-webkit-details-marker { display: none; }
+.dy-details > summary::before { content: "▸"; display: inline-block; margin-right: 8px; transition: transform 0.15s; color: var(--accent-3); }
+.dy-details[open] > summary::before { transform: rotate(90deg); }
+.dy-fields { display: grid; gap: 12px; padding: 4px 14px 14px; }
+.dy-fields label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+
+.dy-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+.dy-actions .primary-btn[disabled] { opacity: 0.55; cursor: not-allowed; filter: none; }
+.dy-hint { margin: 10px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+/* результат анализа */
+.dy-block-title { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin: 18px 0 8px; }
+.dy-block-title:first-child { margin-top: 0; }
+.dy-summary { margin: 0; font-size: 14px; color: #d4d8e5; }
+.dy-meta { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+.dy-stale { margin-top: 10px; font-size: 12.5px; color: #ffd9a3; background: rgba(255, 181, 107, 0.08); border: 1px dashed rgba(255, 181, 107, 0.4); border-radius: 10px; padding: 8px 11px; }
+.dy-loading { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: #cfd4e2; }
+.dy-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: dy-rot 0.8s linear infinite; flex: 0 0 auto; }
+@keyframes dy-rot { to { transform: rotate(360deg); } }
+.dy-error { color: #ffb4a8; background: rgba(255, 96, 76, 0.1); border: 1px solid rgba(255, 96, 76, 0.28); border-radius: 12px; padding: 12px 14px; font-size: 13px; }
+.dy-error .primary-btn, .dy-error .ghost-text { margin-top: 10px; }
+.dy-warn { color: #ffd9a3; background: rgba(255, 181, 107, 0.08); border: 1px solid rgba(255, 181, 107, 0.3); border-radius: 12px; padding: 10px 13px; font-size: 12.5px; margin-bottom: 14px; }
+
+/* карточки: предложение цели, гипотеза */
+.dy-prop, .dy-hyp {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 15px;
+  background: rgba(255, 255, 255, 0.025);
+  margin-bottom: 9px;
+}
+.dy-prop.is-done, .dy-hyp.is-rejected { opacity: 0.6; }
+.dy-prop-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.dy-prop-title { font-weight: 700; font-size: 14.5px; line-height: 1.35; }
+.dy-prop p, .dy-hyp p { margin: 6px 0 0; font-size: 12.8px; color: #b9bfd0; }
+.dy-prop ul { margin: 8px 0 0; padding-left: 18px; font-size: 12.8px; color: #b9bfd0; display: grid; gap: 2px; }
+.dy-prop small { color: var(--muted); }
+.dy-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.dy-compact { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; font-size: 13px; color: #b9bfd0; }
+.dy-compact b { color: var(--text); }
+
+.dy-quote { margin: 8px 0 0; padding: 6px 11px; border-left: 2px solid var(--accent-2); font-size: 12.8px; color: #cfd4e2; font-style: italic; }
+.dy-quote small { display: block; font-style: normal; color: var(--muted); margin-top: 2px; }
+
+.dy-sbtn {
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: 0.15s;
+  white-space: nowrap;
+}
+.dy-sbtn:hover { background: rgba(255, 255, 255, 0.1); }
+.dy-sbtn.accent { border-color: rgba(198, 242, 78, 0.45); color: var(--accent); }
+.dy-sbtn.danger { border-color: rgba(255, 122, 138, 0.4); color: #ffb6bf; }
+.dy-sbtn.on { background: rgba(124, 108, 255, 0.22); border-color: rgba(124, 108, 255, 0.5); color: #c0b8ff; }
+
+/* бейджи */
+.dy-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.dy-badge {
+  font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: rgba(255, 255, 255, 0.03); white-space: nowrap;
+}
+.dy-badge.main { color: var(--accent); border-color: rgba(198, 242, 78, 0.35); background: rgba(198, 242, 78, 0.1); }
+.dy-badge.urgent { color: #ffb6bf; border-color: rgba(255, 122, 138, 0.4); background: rgba(255, 122, 138, 0.12); }
+.dy-badge.high { color: var(--accent); }
+.dy-badge.medium { color: #ffbe5a; }
+
+/* история */
+.dy-hist-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
+.dy-hist-head h3 { margin: 0; }
+.dy-hist-head input { flex: 1; min-width: 160px; max-width: 320px; }
+.dy-hist { display: grid; gap: 6px; }
+.dy-hist-item {
+  display: grid; grid-template-columns: 110px 1fr auto; gap: 10px; align-items: baseline;
+  text-align: left; width: 100%; font: inherit; color: var(--text);
+  background: rgba(0, 0, 0, 0.22); border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px; padding: 9px 12px; cursor: pointer; transition: 0.15s;
+}
+.dy-hist-item:hover { border-color: var(--line-strong); }
+.dy-hist-item.on { border-color: var(--accent); }
+.dy-hist-date { font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--accent-3); }
+.dy-hist-text { font-size: 12.8px; color: #b9bfd0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dy-hist-flags { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.dy-empty { margin: 0; font-size: 13px; color: var(--muted); }
+
+/* цели */
+.dy-goals-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.dy-group-title { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin: 22px 0 10px; display: flex; gap: 8px; align-items: center; }
+.dy-group-title span { font-family: "JetBrains Mono", monospace; color: var(--text); }
+
+.dy-goal {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 15px 16px;
+  background: var(--card);
+  margin-bottom: 10px;
+  transition: border-color 0.15s;
+}
+.dy-goal:hover { border-color: var(--line-strong); }
+.dy-goal.is-urgent { border-color: rgba(255, 122, 138, 0.35); }
+.dy-goal.is-done { opacity: 0.7; border-color: rgba(198, 242, 78, 0.25); }
+.dy-goal-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.dy-goal-title { font-weight: 700; font-size: 15px; line-height: 1.35; min-width: 0; overflow-wrap: anywhere; }
+.dy-goal.is-done .dy-goal-title { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, 0.3); }
+.dy-deadline {
+  font-family: "JetBrains Mono", monospace; font-size: 11.5px; white-space: nowrap;
+  padding: 3px 9px; border-radius: 8px; color: #cfd4e2;
+  background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line);
+}
+.dy-deadline.overdue { color: #ffb6bf; border-color: rgba(255, 122, 138, 0.45); background: rgba(255, 122, 138, 0.1); }
+.dy-deadline.soon { color: #ffd9a3; border-color: rgba(255, 181, 107, 0.45); }
+.dy-deadline.none { color: var(--muted); border-style: dashed; background: none; }
+.dy-goal-desc { margin: 6px 0 0; font-size: 12.8px; color: #b9bfd0; overflow-wrap: anywhere; }
+.dy-goal-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.dy-goal-row select { padding: 5px 9px; font-size: 12px; }
+
+.dy-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.dy-bar { flex: 1; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.dy-bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent-2), var(--accent-3)); transition: width 0.4s; }
+.dy-bar.full > span { background: var(--accent); }
+.dy-progress-text { font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+.dy-subs { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 5px; }
+.dy-sub-item { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; padding: 6px 9px; border-radius: 9px; background: rgba(0, 0, 0, 0.2); }
+.dy-sub-item label { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; cursor: pointer; overflow-wrap: anywhere; }
+.dy-sub-item input[type="checkbox"] { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--accent); flex: 0 0 auto; padding: 0; }
+.dy-sub-item.done label span { text-decoration: line-through; color: var(--muted); }
+.dy-sub-item small { color: var(--muted); white-space: nowrap; }
+.dy-x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 3px; }
+.dy-x:hover { color: var(--bad); }
+.dy-addsub { display: flex; gap: 6px; margin-top: 8px; }
+.dy-addsub input { flex: 1; font-size: 12.5px; }
+.dy-foot { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255, 255, 255, 0.08); }
+.dy-foot .grow { flex: 1; }
+.dy-i {
+  width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line-strong);
+  background: rgba(124, 108, 255, 0.15); color: #c0b8ff; font: italic 700 14px Georgia, serif; cursor: pointer;
+}
+.dy-i:hover { background: rgba(124, 108, 255, 0.3); }
+.dy-cancelled summary { cursor: pointer; font-size: 12.5px; color: var(--muted); padding: 6px 0; }
+
+/* модальное окно */
+.dy-lock { overflow: hidden; }
+.dy-modal {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(4, 5, 8, 0.72); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 5vh 14px; overflow-y: auto; animation: fade 0.2s ease;
+}
+.dy-modal-box {
+  width: 100%; max-width: 560px; background: var(--card-solid);
+  border: 1px solid var(--line-strong); border-radius: 18px; padding: 20px;
+  box-shadow: var(--shadow);
+}
+.dy-modal-box h3 { margin: 0 0 14px; font-size: 17px; display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.dy-modal-box h3 .dy-x { font-size: 18px; }
+.dy-form { display: grid; gap: 12px; }
+.dy-form label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.dy-form input[type="text"], .dy-form input[type="date"], .dy-form select { width: 100%; font-size: 14px; }
+.dy-form input[type="date"] { color-scheme: dark; }
+.dy-form .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dy-form .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.dy-form .check input { width: 17px; height: 17px; accent-color: var(--accent); padding: 0; }
+.dy-form-err { color: #ffb4a8; font-size: 12.5px; min-height: 0; }
+.dy-info-sec { margin: 0 0 14px; }
+.dy-info-sec h4 { margin: 0 0 5px; font-size: 12px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.dy-info-sec p, .dy-info-sec li { margin: 0; font-size: 13.5px; color: #d4d8e5; }
+.dy-info-sec ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+
+@media (max-width: 620px) {
+  #panel-diary textarea, .dy-form input, .dy-form select, .dy-hist-head input, .dy-addsub input { font-size: 16px; }
+  .dy-status { margin-left: 0; width: 100%; }
+  .dy-hist-item { grid-template-columns: 1fr auto; }
+  .dy-hist-text { grid-column: 1 / -1; grid-row: 2; }
+  .dy-form .two { grid-template-columns: 1fr; }
+  .dy-modal { padding: 2vh 10px; }
+  .dy-goal { padding: 13px; }
+  .dy-goal-top { flex-direction: column-reverse; align-items: flex-start; gap: 8px; }
+  .dy-deadline { align-self: flex-end; }
+}
