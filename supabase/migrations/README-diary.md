@@ -87,6 +87,14 @@ supabase functions deploy analyze-diary --no-verify-jwt --project-ref dzgututxrg
    select status_code, content from net._http_response where id = <id>;
    ```
    До вставки ключа ответ — 500 `not_configured` (это норма).
-5. **Ключ и CORS** — остаются за владельцем аккаунта (см. шаг 3 выше):
-   `GEMINI_API_KEY`, при необходимости `GEMINI_MODEL`, `AI_DAILY_LIMIT`,
-   `ALLOWED_ORIGINS` (туда добавить адрес preview-деплоя ветки).
+5. **Ключ** — остаётся за владельцем аккаунта:
+
+   ```bash
+   supabase secrets set GEMINI_API_KEY=ТВОЙ_КЛЮЧ --project-ref dzgututxrglgvcvduqqx
+   ```
+
+   Ключ живёт только в Secrets функции: в репозиторий, в браузер и в чат он не идёт.
+   `ALLOWED_ORIGINS` уже задан (боевой домен, оба preview-адреса, localhost);
+   при появлении нового адреса превью — дописать его туда же.
+   `GEMINI_MODEL` (по умолчанию `gemini-3.1-flash-lite`) и `AI_DAILY_LIMIT` (15)
+   трогать не обязательно — значения по умолчанию рассчитаны на бесплатный тариф.
