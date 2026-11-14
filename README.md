@@ -65,20 +65,37 @@ python3 -m http.server 8100
 ```json
 {
   "framework": null,
-  "buildCommand": null,
+  "buildCommand": "node scripts/build-public.mjs",
   "installCommand": null,
-  "outputDirectory": "."
+  "outputDirectory": "public"
 }
 ```
 
 - `framework: null` — отключает пресет фреймворка, репозиторий считается обычной статикой;
-- `buildCommand` / `installCommand: null` — шагов установки и сборки нет (нет `package.json`);
-- `outputDirectory: "."` — публикуется корень репозитория, где лежит `index.html`.
+- `buildCommand` — `node scripts/build-public.mjs` собирает `public/` из файлов сайта
+  в корне; зависимостей у скрипта нет, поэтому `installCommand` не нужен;
+- `outputDirectory: "public"` — публикуется только собранная папка, а не корень репозитория.
+
+**Почему не корень.** При `outputDirectory: "."` Vercel отдавал из репозитория всё подряд:
+`/README.md`, `/supabase/schema.sql`, `/supabase/migrations/*.sql`, `/supabase/functions/*.ts`.
+Скрипт сборки копирует из корня только файлы с расширением сайта
+(`html, js, css, json, png, jpg, jpeg, svg, ico, webp, woff, woff2, txt, webmanifest`),
+пропускает `vercel.json`, `package.json`, `package-lock.json` и файлы на точку.
+Папки (включая `supabase/`) не копируются вообще, так что новые служебные каталоги
+на прод не утекут сами по себе.
+
+После копирования скрипт читает массив `SHELL` из `sw.js` и проверяет, что каждый файл
+из него лежит в `public/`: пропавший файл роняет сборку с понятной ошибкой, а не даёт
+404 на проде и дыру в офлайн-кэше. Проверить локально:
+
+```bash
+node scripts/build-public.mjs   # ✔ public/ собрана: 22 файлов, сверено с SHELL: 21
+ls public                       # supabase/ и README.md здесь появиться не должны
+```
 
 Значения из `vercel.json` переопределяют Project Settings, поэтому проект собирается
-одинаково после переимпорта или в форке. Только строки или `null`: `false` Vercel
-отклоняет с ошибкой схемы. Без `outputDirectory: "."` сборка падает с
-`STATIC_BUILD_NO_OUT_DIR`, потому что Vercel ищет папку `public/`.
+одинаково после реимпорта или в форке. Только строки или `null`: `false` Vercel
+отклоняет с ошибкой схемы.
 
 ## Установка на телефон
 
