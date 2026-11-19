@@ -94,6 +94,7 @@ async function initSync() {
 
   authPending = true;
   renderAccount(); // сразу показываем «подключаю», а не пустую плашку
+  let clientCreated = false;
 
   try {
     /* SDK грузим динамически: без настроенного Supabase лишних запросов нет.
@@ -106,6 +107,7 @@ async function initSync() {
     sb = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
+    clientCreated = true;
 
     /* Подписку ставим ДО обмена кода: иначе SIGNED_IN от обмена
        пройдёт мимо обработчика и синхронизация не запустится. */
@@ -140,13 +142,17 @@ async function initSync() {
     if (session) {
       await pullThenPush();
       /* окно 10 с — внутри timerSyncFromServer: каждый сигнал раньше
-       приносил свой timer_status */
-    if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
+         приносил свой timer_status */
+      if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
     }
     else if (hasLocalData()) await maybeOfferMigration();
   } catch (e) {
     console.warn("Синхронизация недоступна", e);
-    sb = null;
+    /* Обнуляем только НЕудавшуюся попытку. Если клиент уже создан, а
+       сорвалось что-то после (обмен кода, первый проход), обнулять его
+       нельзя: серверный таймер и намаз молча уходят в локальный режим до
+       перезагрузки — то есть «синхронизация недоступна» на живой связи. */
+    if (!clientCreated) sb = null;
   } finally {
     authPending = false;
     renderAccount();

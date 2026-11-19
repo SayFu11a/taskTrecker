@@ -17,6 +17,7 @@ export function makeServer(clockRef = null) {
     settings: null,
     namaz: {},             // "date|prayer" -> { done, updated_at }
     subs: [],              // push_subscriptions
+    deletes: [],           // удаления подписок (для проверки «чужие не трогаем»)
     calls: [],             // [{ name, at, args }]
     latency: 40,
     skewRef: clockRef || { skew: 0 },
@@ -69,13 +70,27 @@ export function makeServer(clockRef = null) {
       select() { this._op = "select"; return this; },
       eq(c, v) { this._f.push([c, v]); return this; },
       gt(c, v) { this._f.push([c, v, "gt"]); return this; },
+      gte(c, v) { this._f.push([c, v, "gte"]); return this; },
+      /* .or("date.gte.X,updated_at.gt.Y") — как в PostgREST: объединение условий */
+      or(expr) { this._or = String(expr); return this; },
       in(c, v) { this._f.push([c, v, "in"]); return this; },
       order() { return this; },
-      range(a, b) { this._range = [a, b]; return this; },
+      range(a, b) {
+        if (!Number.isFinite(a) || !Number.isFinite(b)) this._unsupported("range");
+        this._range = [a, b];
+        return this;
+      },
       maybeSingle() { this._single = true; return this; },
       upsert(rows, opts) { this._op = "upsert"; this._rows = rows; this._onConflict = opts && opts.onConflict; return this; },
+      neq(c, v) { this._f.push([c, v, "neq"]); return this; },
       delete() { this._op = "delete"; return this; },
       then(res, rej) { return this._run().then(res, rej); },
+      /* Запросы, которых код ждёт от PostgREST, но которых нет в стенде,
+         раньше молча «работали» неправильно (например .range(NaN) отдавал
+         пусто). Теперь это видно сразу. */
+      _unsupported(name) {
+        throw new Error(`стенд не поддерживает .${name}() — добавь его в tests-support/harness.mjs`);
+      },
       async _run() {
         S.calls.push({ name: table + "." + this._op, at: Date.now(), rows: this._rows });
         await sleep(S.latency);
@@ -87,9 +102,24 @@ export function makeServer(clockRef = null) {
           }
           if (table === "settings") return { data: S.settings, error: null };
           if (table === "namaz_marks") {
-            const rows = Object.keys(S.namaz).map((k) => { const [date, prayer] = k.split("|"); return { user_id: "u1", date, prayer, done: S.namaz[k].done, updated_at: S.namaz[k].updated_at }; });
-            const since = (this._f.find((f) => f[0] === "updated_at") || [])[1];
-            const out = since ? rows.filter((r) => r.updated_at > since) : rows;
+            let rows = Object.keys(S.namaz).map((k) => { const [date, prayer] = k.split("|"); return { user_id: "u1", date, prayer, done: S.namaz[k].done, updated_at: S.namaz[k].updated_at }; });
+            /* фильтры как у PostgREST: все eq — И, .or(...) — ИЛИ внутри группы */
+            this._f.forEach(([c, v, op]) => {
+              if (op === "gt") rows = rows.filter((r) => r[c] > v);
+              else if (op === "gte") rows = rows.filter((r) => r[c] >= v);
+              else if (op === "in") rows = rows.filter((r) => v.includes(r[c]));
+              else rows = rows.filter((r) => r[c] === v);
+            });
+            if (this._or) {
+              const parts = this._or.split(",").map((p) => {
+                const [col, rest] = p.split(".", 2).length === 2 ? [p.slice(0, p.indexOf(".")), p.slice(p.indexOf(".") + 1)] : [null, null];
+                const m = /^(gte|gt|lte|lt)\.(.*)$/.exec(rest || "");
+                return m ? { col, op: m[1], v: m[2] } : null;
+              }).filter(Boolean);
+              rows = rows.filter((r) => parts.some((p) => (p.op === "gte" ? r[p.col] >= p.v : r[p.col] > p.v)));
+            }
+            rows.sort((a, b) => (a.date + a.prayer < b.date + b.prayer ? -1 : 1));
+            const out = rows;
             return { data: this._range ? out.slice(this._range[0], this._range[1] + 1) : out, error: null };
           }
           if (table === "push_subscriptions") return { data: S.subs, error: null };
@@ -99,9 +129,20 @@ export function makeServer(clockRef = null) {
           if (table === "days") {
             const rows = Array.isArray(this._rows) ? this._rows : [this._rows];
             for (const r of rows) {
-              const cur = S.days[r.date];
-              // серверный триггер days_touch: updated_at = now() при любом UPDATE
-              S.days[r.date] = { hours: r.hours, mode: r.mode, updated_at: ts(), _client: r.updated_at };
+              const cur = S.days[r.date] || {};
+              /* серверный триггер days_touch (миграция 20261117_sync_fixes):
+                 updated_at двигается только если данные реально изменились */
+              const same =
+                JSON.stringify(cur.hours || {}) === JSON.stringify(r.hours || {}) &&
+                JSON.stringify(cur.mode ?? null) === JSON.stringify(r.mode ?? null);
+              S.days[r.date] = {
+                hours: r.hours,
+                mode: r.mode,
+                updated_at: same ? cur.updated_at || ts() : ts(),
+                _client: r.updated_at,
+              };
+              S.touchCalls = (S.touchCalls || 0) + 1;
+              if (!same) S.touchChanged = (S.touchChanged || 0) + 1;
             }
           }
           if (table === "settings") S.settings = Array.isArray(this._rows) ? this._rows[0] : this._rows;
@@ -116,9 +157,11 @@ export function makeServer(clockRef = null) {
         }
         if (this._op === "delete") {
           if (table === "push_subscriptions") {
-            const [c, v] = this._f[0] || [];
-            if (c === "endpoint") S.subs = S.subs.filter((s) => s.endpoint !== v);
-            if (c === "user_id") S.subs = S.subs.filter((s) => s.user_id !== v);
+            /* удаление по всем условиям, .neq — «не равно» */
+            S.deletes.push({ at: Date.now(), cond: JSON.parse(JSON.stringify(this._f)) });
+            S.subs = S.subs.filter((s) =>
+              this._f.every(([c, v, op]) => (op === "neq" ? s[c] !== v : s[c] === v))
+            );
           }
           return { error: null };
         }

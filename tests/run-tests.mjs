@@ -141,11 +141,28 @@ test("стоп без сети: падаем в локальную остано�
   ok(!w.eval('state.hours[selectedDate].jobs.timer'), "таймер погашен");
 });
 
-test("srvStopInFlight реально используется, а не висит мёртвой переменной", async () => {
-  const ts = read("timersync.js");
-  const uses = ts.split("srvStopInFlight").length - 1;
-  ok(uses >= 3, `srvStopInFlight упоминается ${uses} раз — guard не реализован`);
-  ok(/srvStopInFlight = true/.test(ts) && /finally[\s\S]{0,80}srvStopInFlight = false/.test(ts), "guard не выставляется и не снимается в finally");
+test("двойной клик «стоп»: второго timer_stop нет и нет ложного «Меньше минуты»", async () => {
+  const { server, w, screen } = await boot({ latency: 300 });
+  w.eval('startTimer("jobs")');
+  for (let i = 0; i < 30 && w.eval('JSON.stringify(state.hours[selectedDate] || {})').indexOf("byServer") < 0; i++) await sleep(100);
+  w.__advance(40 * 60000);
+  for (let i = 0; i < 20 && screen("jobs") === "0 мин"; i++) await sleep(100);
+
+  /* два клика подряд, как у человека с быстрым тапом */
+  w.eval('stopTimer(selectedDate, "jobs")');
+  await sleep(40);
+  w.eval('stopTimer(selectedDate, "jobs")');
+  await sleep(3000);
+
+  const stops = server.S.calls.filter((c) => c.name === "timer_stop").length;
+  eq(stops, 1, "запросов timer_stop на двойной клик");
+  eq(w.eval('state.hours[selectedDate].jobs.min'), 40, "минуты в state");
+  /* тост приложения — один элемент #toast; смотрим его, а не textContent
+     документа, куда попадают тексты <script> */
+  const toastText = (w.document.getElementById("toast") || {}).textContent || "";
+  /* «Записано 40 мин» мог перекрыть следующий тост синхронизации — это норма;
+     важно, что ложного «Меньше минуты» не было */
+  ok(!/Меньше минуты/.test(toastText), `показан ложный тост «Меньше минуты» (тост: ${toastText})`);
 });
 
 test("dropServerTimer и adoptServerTimer сохраняют minAt, normalizeDayForDb берёт его из state.minAt", async () => {
@@ -172,6 +189,75 @@ test("подписка на push знает устройство: device_id и �
   ok(/не удаля/i.test(migration), "миграция не оговаривает, что старые строки не удаляются");
 });
 
+/* Поведение функции send-reminders: берём чистую часть (deviceKeyOf) и
+   прогоняем сценарий «Chrome + iPhone одного человека». */
+async function loadReminderHelpers() {
+  /* вырезаем чистые функции из index.ts и исполняем их в node */
+  const src = read("supabase/functions/send-reminders/index.ts");
+  const pick = (name) => {
+    const start = src.indexOf("function " + name);
+    ok(start >= 0, `в send-reminders нет функции ${name}`);
+    let i = src.indexOf("{", start);
+    let depth = 0;
+    for (; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") {
+        depth--;
+        if (!depth) return src.slice(start, i + 1);
+      }
+    }
+    throw new Error("не закрылась функция " + name);
+  };
+  const code =
+    "const LEGACY_DONE = { min: true, norm: true, max: true };" +
+    "function minutesOfRecord(rec){ if(typeof rec==='number') return rec>0?rec:0; if(rec&&typeof rec==='object'&&'min' in rec){const m=Number(rec.min);return Number.isFinite(m)&&m>0?m:0;} return 0; }" +
+    "function runningMinutes(rec){ if(!rec||typeof rec!=='object') return 0; const t=rec.timer&&rec.timer.startedAt; if(!t) return 0; const ts=new Date(t).getTime(); if(!Number.isFinite(ts)) return 0; return Math.max(0, Math.floor((Date.now()-ts)/60000)); }" +
+    "const minutesOf = (h) => Number(h.slice(0,2))*60 + Number(h.slice(3,5));" +
+    "const SLOT_TICK_MIN = 15;" +
+    "function timerRunning(rec){ if(!rec||typeof rec!=='object') return false; const st=rec.timer&&rec.timer.startedAt; if(!st) return false; return Number.isFinite(new Date(st).getTime()); }" +
+    pick("deviceKeyOf") +
+    pick("isFirstTick") +
+    pick("blockStarted") +
+    "return { deviceKeyOf, isFirstTick, blockStarted };";
+  /* файл — TypeScript, а исполняем в node: убираем аннотации типов */
+  const js = code
+    .replace(/\(row: Record<string, unknown>\): string/g, "(row)")
+    .replace(/\(mins: number, from: string\): boolean/g, "(mins, from)")
+    .replace(/\(rec: unknown, legacyLevel: unknown, minNeed: number\): boolean/g, "(rec, legacyLevel, minNeed)")
+    .replace(/LEGACY_DONE\[legacyLevel as string\]/g, "LEGACY_DONE[legacyLevel]");
+  // eslint-disable-next-line no-new-func
+  return new Function(js)();
+}
+
+test("send-reminders: два устройства одного человека получают по одному разу", async () => {
+  const h = await loadReminderHelpers();
+  const rows = [
+    { user_id: "u1", endpoint: "ep-chrome", device_id: "chrome" },
+    { user_id: "u1", endpoint: "ep-iphone", device_id: "iphone" },
+    /* старая строка до миграции: без device_id */
+    { user_id: "u1", endpoint: "ep-old", device_id: null },
+    /* повтор того же устройства (переподписка) */
+    { user_id: "u1", endpoint: "ep-chrome-2", device_id: "chrome" },
+  ];
+  const keys = rows.map((r) => h.deviceKeyOf(r));
+  eq(new Set(keys).size, 3, `устройства схлопнулись в ${new Set(keys).size}: ${JSON.stringify([...new Set(keys)])}`);
+  ok(keys[0] === keys[3], "переподписка того же устройства не схлопнулась");
+  ok(keys[0] !== keys[1], "Chrome и iPhone схлопнулись в одно устройство");
+  ok(new Set([keys[0], keys[1], keys[2]]).size === 3, "старая строка без device_id потерялась");
+
+  /* «первый тик»: 0 и 14 минут после начала — да, 15 и 40 — нет */
+  ok(h.isFirstTick(10 * 60 + 0, "10:00"), "в 10:00 напоминание не отправляется");
+  ok(h.isFirstTick(10 * 60 + 14, "10:00"), "в 10:14 напоминание не отправляется");
+  ok(!h.isFirstTick(10 * 60 + 15, "10:00"), "в 10:15 напоминание всё ещё отправляется");
+  ok(!h.isFirstTick(11 * 60 + 30, "10:00"), "в 11:30 напоминание всё ещё отправляется");
+
+  /* блок уже начат: минуты, идущий таймер или старая отметка уровня */
+  ok(h.blockStarted({ min: 20 }, null, 20), "набранные минуты не считаются начатым блоком");
+  ok(!h.blockStarted({ min: 0 }, null, 20), "пустой блок считается начатым");
+  ok(h.blockStarted({ min: 0, timer: { startedAt: new Date().toISOString() } }, null, 20), "идущий таймер не считается");
+  ok(h.blockStarted(null, "min", 20), "старая отметка уровня не считается");
+});
+
 test("send-reminders: напоминание только в первом тике блока и один раз за блок", async () => {
   const src = read("supabase/functions/send-reminders/index.ts");
   ok(/SLOT_TICK_MIN/.test(src) || /mins - minutesOf\(slot\.from\)/.test(src), "нет ограничения на первый тик блока");
@@ -188,19 +274,80 @@ test("опрос: 5 минут при живой связи, 30 секунд б�
   ok(/liveState === "SUBSCRIBED" \? POLL_LIVE_MS : POLL_OFFLINE_MS/.test(src), "интервал не зависит от состояния realtime");
 });
 
-test("опрос намаза инкрементальный, полная сверка — раз в несколько часов", async () => {
-  const src = read("timersync.js");
-  ok(/\.gt\("updated_at", since\)/.test(src), "намаз качается целиком, без фильтра по updated_at");
-  ok(/FULL_SYNC_MS/.test(src), "нет расписания полной сверки");
+test("намаз: поздний офлайн-клик доезжает без полной сверки (свежие дни по date)", async () => {
+  const { server, w } = await boot({ latency: 30 });
+  const today = w.eval("selectedDate");
+
+  /* Первая сверка: полная, база пустая — запоминаем границу по updated_at.
+     ВАЖНО: namazSync из app.js — это загрузка расписания, а синхронизация
+     отметок живёт в timersync.js (внутри IIFE) и вызывается через
+     pullSettings(). Поэтому дёргаем именно её. */
+  w.eval("pullSettings()");
+  await sleep(400);
+  const fullFirst = server.S.calls.filter((c) => c.name === "namaz_marks.select").length;
+
+  /* Теперь метка в localStorage выглядит «свежей»: прошлая сверка только что.
+     Но на сервере появляется отметка, у которой updated_at СТАРШЕ границы —
+     это клик офлайн, отправленный позже (namaz_set пишет время клиента). */
+  const oldIso = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  server.S.namaz[today + "|fajr"] = { done: true, updated_at: oldIso };
+
+  w.eval("pullSettings()");
+  await sleep(500);
+  eq(w.eval(`!!(state.namaz[${JSON.stringify(today)}] || {}).fajr`), true,
+    "отметка со старым updated_at не доехала — фильтр по updated_at её пропустил");
+  ok(server.S.calls.filter((c) => c.name === "namaz_marks.select").length > fullFirst, "сверки не было");
 });
 
 test("отправляются только изменённые дни, пустой отправки нет", async () => {
-  const src = read("sync.js");
-  ok(/takeDirtyDates/.test(src), "нет списка грязных дат");
-  ok(/markDayDirty/.test(read("app.js")), "дни не помечаются изменёнными");
-  ok(/typeof markDayDirty|markDayDirty/.test(src) || true, "");
-  ok(/clearDirtyDays/.test(src), "грязные даты не очищаются после отправки");
-  ok(/if \(!rows\.length\) return;/.test(src), "пустая отправка не отсекается");
+  const { server, w } = await boot({ latency: 30 });
+  await sleep(700); // стартовая сверка утихла
+  const before = server.S.calls.filter((c) => c.name === "days.upsert").length;
+
+  /* ничего не меняли — отправки быть не должно */
+  w.eval("pushAll()");
+  await sleep(300);
+  eq(server.S.calls.filter((c) => c.name === "days.upsert").length, before,
+    "пустая отправка дней всё-таки ушла");
+
+  /* меняем один день из трёх — уезжает ровно он */
+  w.eval(`state.hours["2026-11-18"] = { jobs: { min: 90 } };
+          state.hours["2026-11-17"] = { ulbi: { min: 45 } };
+          state.hours["2026-11-16"] = { news: { min: 20 } };
+          markDayDirty("2026-11-17");
+          pushAll();`);
+  await sleep(400);
+  const sent = server.S.calls
+    .filter((c) => c.name === "days.upsert")
+    .slice(before)
+    .flatMap((c) => c.rows || [])
+    .map((r) => r.date);
+  eq([...new Set(sent)], ["2026-11-17"], "уехали не только изменённые дни");
+});
+
+test("после обновления несохранённые локальные дни уезжают на сервер (миграция «грязных»)", async () => {
+  /* состояние «старой версии»: дни есть в localStorage, ключа dirty нет */
+  const storage = {
+    "vp-tracker-v1": JSON.stringify({
+      hours: { "2026-11-18": { jobs: { min: 90 } }, "2026-11-17": { ulbi: { min: 45 } } },
+      meta: {},
+      days: {},
+      modes: {},
+    }),
+  };
+  const { server, w } = await boot({ latency: 30, storage });
+  await sleep(1200);
+  ok(w.localStorage.getItem("vp-tracker-dirty-days"), "дни не помечены изменёнными при обновлении");
+  const pushed = server.S.calls.filter((c) => c.name === "days.upsert").flatMap((c) => c.rows || []);
+  const dates = new Set(pushed.map((r) => r.date));
+  ok(dates.has("2026-11-18") && dates.has("2026-11-17"),
+    `не уехали старые дни: отправлены ${JSON.stringify([...dates])}`);
+  eq(w.localStorage.getItem("vp-tracker-dirty-migrated-v1"), "1", "миграция не отмечена как выполненная");
+
+  /* второй запуск на тех же данных: повторной пометки быть не должно */
+  const again = await boot({ latency: 30, storage });
+  await sleep(900);
+  eq(again.w.localStorage.getItem("vp-tracker-dirty-migrated-v1"), "1", "миграция повторилась");
 });
 
 test("все сигналы синхронизации идут через один планировщик с паузой 10 с", async () => {
@@ -231,7 +378,26 @@ test("жизненный цикл: 6 событий за 6 секунд дают
   ok(after < 6, `за 6 событий ушло ${after} запросов, ожидался один проход`);
 });
 
-test("триггер days_touch не трогает updated_at, если hours не изменились", async () => {
+test("триггер days_touch: повторная запись тех же дней не двигает updated_at", async () => {
+  const { server, w } = await boot({ latency: 30 });
+  await sleep(400);
+  /* пишем день дважды с одинаковыми данными — как старый клиент, который
+     отправлял все дни на каждый сигнал */
+  const row = { user_id: "u1", date: "2026-11-19", hours: { jobs: { min: 40 } }, mode: null, updated_at: new Date().toISOString() };
+  await w.eval(`(async()=>{ await sb.from("days").upsert(${JSON.stringify([row])}, { onConflict: "user_id,date" }); })()`);
+  await sleep(200);
+  const firstAt = server.S.days["2026-11-19"].updated_at;
+  await sleep(30);
+  await w.eval(`(async()=>{ await sb.from("days").upsert(${JSON.stringify([row])}, { onConflict: "user_id,date" }); })()`);
+  await sleep(200);
+  eq(server.S.days["2026-11-19"].updated_at, firstAt, "updated_at сдвинулся от записи без изменений");
+  /* а реальное изменение — двигает */
+  await w.eval(`(async()=>{ await sb.from("days").upsert([{...${JSON.stringify(row)}, hours: { jobs: { min: 55 } }}], { onConflict: "user_id,date" }); })()`);
+  await sleep(200);
+  ok(server.S.days["2026-11-19"].updated_at !== firstAt, "updated_at не сдвинулся при реальном изменении");
+});
+
+test("SQL-миграция: функция touch_updated_at сравнивает старое и новое", async () => {
   const sql = read("supabase/migrations/20261117_sync_fixes.sql");
   ok(/create or replace function public\.touch_updated_at/.test(sql), "триггер не переопределён");
   ok(/to_jsonb\(old\) - 'updated_at' is distinct from to_jsonb\(new\) - 'updated_at'/.test(sql), "нет сравнения старого и нового значения");

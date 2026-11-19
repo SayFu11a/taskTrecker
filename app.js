@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v41";
+const BUILD_LABEL = "сборка v42";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -50,6 +50,25 @@ function loadDirtyDays() {
 
 let dirtyDays = loadDirtyDays();
 let dirtyLoadedFromDisk = null;
+
+/* В первый запуск новой версии список пуст, а на устройстве могли остаться
+   дни, которые ещё не уехали на сервер (приложение жило без этого списка).
+   Один раз помечаем изменёнными все локальные дни — их и отправит первый же
+   проход. Дальше список ведём сами, поэтому повторно не срабатывает. */
+const DIRTY_MIGRATED_KEY = "vp-tracker-dirty-migrated-v1";
+
+function migrateDirtyDaysOnce() {
+  try {
+    if (localStorage.getItem(DIRTY_MIGRATED_KEY)) return 0;
+    const dates = Object.keys((state && state.hours) || {}).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    dates.forEach((d) => dirtyDays.add(d));
+    if (dates.length) saveDirtyDays();
+    localStorage.setItem(DIRTY_MIGRATED_KEY, "1");
+    return dates.length;
+  } catch {
+    return 0;
+  }
+}
 
 function saveDirtyDays() {
   try {
@@ -263,6 +282,10 @@ var booting = true;
         toast(`Таймер по «${blockName(t.block)}» шёл слишком долго — записал ${fmtMinutes(add)}. Проверь время.`);
       }, 1200);
     });
+
+  /* Разово: всё, что есть на устройстве, считаем неотправленным. */
+  const migrated = typeof migrateDirtyDaysOnce === "function" ? migrateDirtyDaysOnce() : 0;
+  if (migrated) console.log("Дней помечено изменёнными при обновлении:", migrated);
 
   saveLocalOnly();
   if (moved) console.log("Мигрировано отметок в минуты:", moved);
@@ -535,6 +558,10 @@ function startTimer(blockId) {
    Пока идёт запрос, отметка в state остаётся серверной: guard в timersync.js
    (srvStopInFlight) не даёт фоновой сверке вернуть её обратно. */
 function stopTimer(dateKey, blockId) {
+  /* Второй клик по «стоп», пока ответ сервера в пути: таймер уже не наш,
+     и повторный timer_stop вернул бы «нет таймера» — с ложным тостом
+     «Меньше минуты». Просто игнорируем. */
+  if (typeof srvStopInFlight !== "undefined" && srvStopInFlight) return;
   const targets = [];
   if (blockId) targets.push({ date: dateKey || selectedDate, block: blockId });
   else runningTimers().forEach((t) => targets.push({ date: t.date, block: t.block }));

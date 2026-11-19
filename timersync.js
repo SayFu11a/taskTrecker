@@ -442,6 +442,17 @@ function srvElapsedMin() {
      целиком (166 запросов в сутки на ровном месте). */
   const SYNC_KEY = "vp-tracker-namaz-synced-at-v1"; // ISO прошлой полной сверки
   const FULL_SYNC_MS = 6 * 60 * 60 * 1000; // полная сверка раз в 6 часов
+  /* Окно «свежих» дней. Отметку, нажатую офлайн в 10:00 и отправленную в
+     14:00, namaz_set запишет с временем клика — по updated_at такое
+     изменение уже не поймать, а полной сверки ждать до 6 часов. Поэтому
+     свежие дни перечитываем по date: их немного, и правки в них приходят
+     сразу на все устройства. */
+  const RECENT_DAYS = 7;
+
+  function isoDay(offsetDays) {
+    const d = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
 
   function lastSyncedAt() {
     try {
@@ -469,10 +480,13 @@ function srvElapsedMin() {
     try {
       stamp(); // правки, сделанные до запроса
 
-      /* Инкрементально: только то, что изменилось после прошлой сверки.
-         updated_at ставит база (namaz_set), поэтому граница надёжная. */
-      const since = needFullSync() ? "" : lastSyncedAt();
-      const full = !since;
+      /* Полная сверка раз в 6 часов. В остальное время — два среза в одном
+         проходе: свежие дни целиком (по date) и всё, что изменилось после
+         прошлой сверки (по updated_at). Первое ловит поздно отправленные
+         офлайн-правки, второе — изменения в старых днях. */
+      const full = needFullSync();
+      const since = full ? "" : lastSyncedAt();
+      const recentFrom = isoDay(-RECENT_DAYS);
 
       const rows = [];
       for (let from = 0; ; from += PAGE) {
@@ -480,7 +494,13 @@ function srvElapsedMin() {
           .from("namaz_marks")
           .select("date,prayer,done,updated_at")
           .eq("user_id", session.user.id);
-        if (since) q = q.gt("updated_at", since);
+        if (full) {
+          /* без фильтра — забираем всё */
+        } else if (since) {
+          q = q.or(`date.gte.${recentFrom},updated_at.gt.${since}`);
+        } else {
+          q = q.gte("date", recentFrom);
+        }
         q = q.order("date").order("prayer").range(from, from + PAGE - 1);
         const { data, error } = await q;
         if (error) throw error;
