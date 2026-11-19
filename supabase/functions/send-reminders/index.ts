@@ -131,9 +131,21 @@ Deno.serve(async (req) => {
   /* Воскресенье — выходной (ручной прогон и тест — можно) */
   if (weekday === 6 && !isTest && !dry && !force) return json({ sent: 0, reason: "воскресенье" });
 
+  /* Напоминание — только в ПЕРВОМ тике блока (минуты в [from, from+15)),
+     иначе крон */15 слал одно и то же на каждом тике, пока блок не набран.
+     Вместе с журналом reminder_log это даёт «одно напоминание на блок». */
+  const SLOT_TICK_MIN = 15;
+
   let slot = isTest
     ? TEST_SLOT
     : SLOTS.find((s) => mins >= minutesOf(s.from) && mins < minutesOf(s.to));
+
+  if (!isTest && slot && !force) {
+    const intoSlot = mins - minutesOf(slot.from);
+    if (intoSlot >= SLOT_TICK_MIN) {
+      return json({ sent: 0, reason: "не первый тик блока", slot: slot.from, mins });
+    }
+  }
 
   if (force && !isTest) {
     slot = (slotParam ? SLOTS.find((s) => s.from === slotParam) : slot) ?? SLOTS[0];
@@ -180,6 +192,19 @@ Deno.serve(async (req) => {
     }
   }
 
+  /* Один раз за блок: в reminder_log пишем (пользователь, дата, блок),
+     повторная отправка в тот же блок в тот же день не делается.
+     force=1 (ручной прогон) журнал игнорирует. */
+  if (!isTest && !force && slot.block !== "__test__" && ids.length) {
+    const { data: logRows } = await supabase
+      .from("reminder_log")
+      .select("user_id")
+      .eq("date", dateKey)
+      .eq("slot", slot.block)
+      .in("user_id", ids);
+    for (const row of logRows ?? []) skip.add(row.user_id as string);
+  }
+
   const targets = (subs ?? []).filter((r) => !skip.has(r.user_id as string));
 
   if (dry) {
@@ -197,14 +222,19 @@ Deno.serve(async (req) => {
   let sent = 0;
   let removed = 0;
   const failures: string[] = [];
+  const sentTo = new Set<string>();
 
   for (const row of targets) {
+    /* на пользователя — одна доставка за блок, даже если у него три
+       подписки: дубль iPhone получал то же уведомление второй раз */
+    if (sentTo.has(row.user_id as string)) continue;
     try {
       await webpush.sendNotification(
         row.subscription as never,
         JSON.stringify({ title: slot.title, body: slot.body, tag: `vp-${slot.from}`, url: "./" })
       );
       sent++;
+      sentTo.add(row.user_id as string);
     } catch (e) {
       const status = (e as { statusCode?: number }).statusCode;
       if (status === 404 || status === 410) {
@@ -214,6 +244,16 @@ Deno.serve(async (req) => {
         failures.push(`${status ?? "?"}: ${(e as Error).message}`);
       }
     }
+  }
+
+  /* Запоминаем, кому уже напомнили. Если запись не удалась — не страшно:
+     следующий тик попробует снова, а дублей всё равно не будет из-за
+     «только первый тик». */
+  if (!isTest && sentTo.size) {
+    await supabase.from("reminder_log").upsert(
+      [...sentTo].map((uid) => ({ user_id: uid, date: dateKey, slot: slot.block })),
+      { onConflict: "user_id,date,slot" }
+    );
   }
 
   return json({ sent, removed, slot: slot.from, date: dateKey, failures });
