@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "mkdir -p public && tar -cf - --exclude=public --exclude=.git . | tar -xf - -C public",
+  "buildCommand": "node scripts/build-public.mjs",
   "installCommand": null,
-  "outputDirectory": ".",
+  "outputDirectory": "public",
   "headers": [
     {
       "source": "/sw.js",
