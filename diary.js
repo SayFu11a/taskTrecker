@@ -488,7 +488,6 @@
       const mustPull = anyDirty() || !pullRecent();
       const changed = mustPull ? await pullAll(u) : false;
       await pushAll(u);
-      if (!mustPull) notePull();
       persist();
       V.noTables = false;
       V.syncError = "";

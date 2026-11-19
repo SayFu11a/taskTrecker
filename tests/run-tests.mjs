@@ -241,6 +241,12 @@ test("триггер days_touch не трогает updated_at, если hours �
 test("дневник: pull четырёх таблиц только если прошла минута или были правки", async () => {
   const src = read("diary.js");
   ok(/PULL_GAP_MS|pullGap|shouldPull/.test(src), "нет ограничения на частоту pull дневника");
+  /* Отметку «когда сверялись» ставит только сам pull. Иначе при пропущенном
+     pull время уползает вперёд и следующая сверка не случится никогда. */
+  const afterSync = src.slice(src.indexOf("async function doSync"), src.indexOf("function hookAuth"));
+  ok(!/if\s*\(!mustPull\)\s*notePull\(\)/.test(afterSync), "отметка ставится и без pull — сверка может зависнуть навсегда");
+  ok(/mustPull\s*\?\s*await\s+pullAll/.test(afterSync) || /if\s*\(mustPull\)[\s\S]{0,60}pullAll/.test(afterSync),
+    "pull не обусловлен правками и таймером");
 });
 
 /* ═══════════ 4. НАМАЗ БЕЗ ДУБЛЕЙ ═══════════ */
