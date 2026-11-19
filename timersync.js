@@ -108,18 +108,20 @@ async function timerStopRemote() {
      Без этого флага таймер воскресал в state, и на сервер уезжала запись
      с min: 0 и идущим таймером. */
   srvStopInFlight = true;
-  const askedAtMs = Date.now();
   try {
     const res = await timerRpc("timer_stop", {});
     if (!res) return null;
     noteServerNow(res.now);
-    if (res.stopped) srvTimer = null;
     /* стоп ответил — снимок серверного таймера больше не нужен */
     srvTimer = null;
-    if (res.min === undefined || res.min === null) {
-      const mins = Math.round((Number(res.elapsed_min) || 0));
-      return { ...res, min: Math.min(mins, 12 * 60), min_at: res.stopped_at ? Date.parse(res.stopped_at) : askedAtMs };
-    }
+    /* База всегда возвращает посчитанные минуты (и при stopped: false их
+       нет — таймера не было). Ответ «остановлен, а минут нет» — это
+       неполный ответ: считаем, что сервер не ответил, и останавливаем
+       локально по серверным часам. Раньше здесь был запасной путь,
+       который писал только натикавшее и терял прежние минуты блока. */
+    /* именно null/undefined, а не «не число»: Number(null) === 0 и прошло бы
+       проверку, записав 0 минут вместо натикавших */
+    if (res.stopped && (res.min === null || res.min === undefined || !Number.isFinite(Number(res.min)))) return null;
     return res;
   } catch (e) {
     console.warn("Серверный стоп не прошёл, считаем локально", e);
@@ -440,7 +442,14 @@ function srvElapsedMin() {
      кеша ещё нет. В остальное время забираем только строки, изменённые
      после прошлой сверки — иначе при каждой сверке скачивались все отметки
      целиком (166 запросов в сутки на ровном месте). */
-  const SYNC_KEY = "vp-tracker-namaz-synced-at-v1"; // ISO прошлой полной сверки
+  /* Два разных ключа, и это важно:
+     CURSOR_KEY — до какого времени мы уже видели строки (крутится вместе
+     с отметками). FULL_KEY — когда в последний раз делали полную сверку.
+     Раньше ключ был один: если новых отметок не было больше 6 часов (ночь,
+     утро до первого намаза), «время последней сверки» оставалось старым,
+     и каждый опрос превращался в полную выгрузку всех строк. */
+  const CURSOR_KEY = "vp-tracker-namaz-synced-at-v2";
+  const FULL_KEY = "vp-tracker-namaz-full-at-v2";
   const FULL_SYNC_MS = 6 * 60 * 60 * 1000; // полная сверка раз в 6 часов
   /* Окно «свежих» дней. Отметку, нажатую офлайн в 10:00 и отправленную в
      14:00, namaz_set запишет с временем клика — по updated_at такое
@@ -454,23 +463,34 @@ function srvElapsedMin() {
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
 
-  function lastSyncedAt() {
+  function readKey(key) {
     try {
-      const v = localStorage.getItem(SYNC_KEY);
+      const v = localStorage.getItem(key);
       return v && Number.isFinite(Date.parse(v)) ? v : "";
     } catch {
       return "";
     }
   }
-  function noteSyncedAt(iso) {
+  function writeKey(key, iso) {
     try {
-      localStorage.setItem(SYNC_KEY, iso || new Date().toISOString());
+      localStorage.setItem(key, iso || new Date().toISOString());
     } catch {
       /* ignore */
     }
   }
+  /* Курсор инкрементальной выгрузки: граница «что мы уже видели». */
+  function lastSyncedAt() {
+    return readKey(CURSOR_KEY);
+  }
+  function noteSyncedAt(iso) {
+    writeKey(CURSOR_KEY, iso);
+  }
+  /* Время последней ПОЛНОЙ сверки — отдельно от курсора. */
+  function noteFullSyncAt(iso) {
+    writeKey(FULL_KEY, iso);
+  }
   function needFullSync() {
-    const last = lastSyncedAt();
+    const last = readKey(FULL_KEY);
     if (!last) return true;
     return Date.now() - Date.parse(last) > FULL_SYNC_MS;
   }
@@ -523,8 +543,13 @@ function srvElapsedMin() {
       /* Границу следующей сверки берём по времени сервера: строка, записанная
          в ту же миллисекунду, но позже, иначе потерялась бы. */
       const latest = rows.reduce((max, r) => (r.updated_at > max ? r.updated_at : max), "");
-      if (latest) noteSyncedAt(latest);
-      else if (full) noteSyncedAt(new Date().toISOString());
+      /* Курсор ставим ВСЕГДА: если строк не было, границей становится «сейчас».
+         Иначе у нового человека (и у пустой базы) курсор оставался пустым,
+         и каждый опрос шёл как полная выгрузка. Если строки были — берём их
+         время, оно не даст пропустить запись в ту же миллисекунду. */
+      noteSyncedAt(latest || new Date().toISOString());
+      /* полную сверку отмечаем по факту её завершения, даже если строк не было */
+      if (full) noteFullSyncAt(new Date().toISOString());
 
       /* Результат = сервер + ещё не ушедшие локальные правки поверх */
       const want = { ...server };

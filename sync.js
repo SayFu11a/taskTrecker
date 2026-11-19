@@ -411,6 +411,7 @@ async function pullThenPush() {
   syncBusy = true;
   pullLastAt = Date.now();
 
+  let ok = false;
   try {
     const { data, error } = await sb
       .from("days")
@@ -433,11 +434,15 @@ async function pullThenPush() {
     if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
     if (session && session.user) syncLastSessionId = session.user.id;
     toast("Синхронизировано");
+    ok = true;
   } catch (e) {
     console.warn("Не удалось синхронизировать", e);
     toast("Нет связи с сервером — работаем локально.");
   } finally {
     syncBusy = false;
+    /* Проход сорвался (нет сети) — окно «не чаще раза в минуту» снимаем:
+       иначе вернувшаяся сеть упрётся в него, и правки будут ждать. */
+    if (!ok) pullLastAt = 0;
   }
 }
 
@@ -618,7 +623,10 @@ window.addEventListener("online", () => {
   } catch {
     /* ignore */
   }
-  if (pending) requestSync("online");
+  /* force: сеть вернулась — это редкое и важное событие. Через обычное окно
+     его отбрасывало «проход был меньше минуты назад», и правки, сделанные
+     без сети, ждали следующего сигнала. */
+  if (pending) requestSync("online", { force: true });
 });
 
 /* Вернулись во вкладку — подтягиваем изменения с других устройств.

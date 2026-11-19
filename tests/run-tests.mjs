@@ -274,6 +274,32 @@ test("опрос: 5 минут при живой связи, 30 секунд б�
   ok(/liveState === "SUBSCRIBED" \? POLL_LIVE_MS : POLL_OFFLINE_MS/.test(src), "интервал не зависит от состояния realtime");
 });
 
+test("намаз: после 6 часов без новых отметок опрос не превращается в полную выгрузку", async () => {
+  const { server, w } = await boot({ latency: 30 });
+
+  /* Первая сверка — полная: база пустая, ставятся оба ключа. */
+  w.eval("pullSettings()");
+  await sleep(500);
+  const cursor = w.localStorage.getItem("vp-tracker-namaz-synced-at-v2");
+  const fullAt = w.localStorage.getItem("vp-tracker-namaz-full-at-v2");
+  ok(cursor, "курсор не завёлся — каждый опрос будет полной выгрузкой");
+  ok(fullAt, "время полной сверки не завелось");
+
+  /* Ночь: новых отметок не было 8 часов. Курсор остался старым, но время
+     ПОЛНОЙ сверки свежее — значит следующий опрос обязан быть срезом,
+     а не выгрузкой всего. */
+  w.localStorage.setItem("vp-tracker-namaz-synced-at-v2", new Date(Date.now() - 8 * 3600 * 1000).toISOString());
+  const fresh = Date.now() - Date.parse(w.localStorage.getItem("vp-tracker-namaz-full-at-v2")) < 60_000;
+  ok(fresh, "время полной сверки старое — опрос пойдёт полной выгрузкой");
+
+  /* Инкрементальный запрос содержит срез по дате, полный — нет. */
+  server.S.namaz["2026-11-19|fajr"] = { done: true, updated_at: new Date(Date.now() - 60000).toISOString() };
+  w.eval("pullSettings()");
+  await sleep(600);
+  const before = w.localStorage.getItem("vp-tracker-namaz-synced-at-v2");
+  ok(Date.parse(before) > Date.now() - 5 * 60_000, `курсор не сдвинулся после среза: ${before}`);
+});
+
 test("намаз: поздний офлайн-клик доезжает без полной сверки (свежие дни по date)", async () => {
   const { server, w } = await boot({ latency: 30 });
   const today = w.eval("selectedDate");
@@ -350,13 +376,37 @@ test("после обновления несохранённые локальн�
   eq(again.w.localStorage.getItem("vp-tracker-dirty-migrated-v1"), "1", "миграция повторилась");
 });
 
+test("после провала связи «online» сразу досылает правки, а не ждёт минуту", async () => {
+  const { server, w } = await boot({ latency: 30 });
+  await sleep(600);
+
+  /* правка, которую надо дослать */
+  w.eval(`state.hours["2026-11-18"] = { jobs: { min: 90 } }; markDayDirty("2026-11-18");`);
+  w.eval(`localStorage.setItem("vp-tracker-pending", "1");`);
+
+  /* сеть пропала: проход падает */
+  server.S.offline = true;
+  w.eval('requestSync("test-offline", { force: true })');
+  await sleep(700);
+  eq(w.eval("typeof pullLastAt !== 'undefined' ? pullLastAt : -1"), 0,
+    "после провала окно «не чаще раза в минуту» не снято");
+
+  /* сеть вернулась — событие online должно дослать правки немедленно */
+  server.S.offline = false;
+  const before = server.S.calls.filter((c) => c.name === "days.upsert").length;
+  w.dispatchEvent(new w.Event("online"));
+  await sleep(900);
+  const after = server.S.calls.filter((c) => c.name === "days.upsert").length;
+  ok(after > before, "после возврата сети правки не ушли");
+});
+
 test("все сигналы синхронизации идут через один планировщик с паузой 10 с", async () => {
   const src = read("sync.js");
   ok(/SYNC_MIN_GAP = 10000/.test(src), "нет паузы между запусками");
   ok(/function requestSync/.test(src), "нет общего планировщика");
   const vis = /document\.addEventListener\("visibilitychange"[\s\S]{0,200}requestSync\("visibility"\)/.test(src);
   ok(vis, "возврат во вкладку не идёт через планировщик");
-  const online = /addEventListener\("online"[\s\S]{0,300}requestSync\("online"\)/.test(src);
+  const online = /addEventListener\("online"[\s\S]{0,400}requestSync\("online"(?:,\s*\{\s*force:\s*true\s*\})?\)/.test(src);
   ok(online, "online не идёт через планировщик");
   ok(/SIGNED_IN[\s\S]{0,400}sameSession/.test(src), "SIGNED_IN не проверяет, та же ли сессия");
   ok(!/if \(event === "SIGNED_IN"\) pullThenPush\(\)/.test(src), "SIGNED_IN всё ещё запускает синхронизацию напрямую");

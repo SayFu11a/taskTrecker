@@ -18,6 +18,7 @@ export function makeServer(clockRef = null) {
     namaz: {},             // "date|prayer" -> { done, updated_at }
     subs: [],              // push_subscriptions
     deletes: [],           // удаления подписок (для проверки «чужие не трогаем»)
+    offline: false,        // true — все запросы падают, как без сети
     calls: [],             // [{ name, at, args }]
     latency: 40,
     skewRef: clockRef || { skew: 0 },
@@ -29,6 +30,7 @@ export function makeServer(clockRef = null) {
 
   function rpc(name, args = {}) {
     S.calls.push({ name, at: Date.now(), args });
+    if (S.offline) return sleep(S.latency).then(() => ({ data: null, error: { message: "нет сети" } }));
     return sleep(S.latency).then(() => {
       if (name === "timer_start") {
         let created = false;
@@ -94,6 +96,7 @@ export function makeServer(clockRef = null) {
       async _run() {
         S.calls.push({ name: table + "." + this._op, at: Date.now(), rows: this._rows });
         await sleep(S.latency);
+        if (S.offline) return { data: null, error: { message: "нет сети" } };
         if (this._op === "select") {
           if (table === "days") {
             let rows = Object.keys(S.days).map((d) => ({ user_id: "u1", date: d, hours: S.days[d].hours, blocks: null, mode: S.days[d].mode, updated_at: S.days[d].updated_at }));
