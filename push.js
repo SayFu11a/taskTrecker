@@ -4,6 +4,28 @@
    - свой звук задать нельзя — играет системный. */
 
 const PUSH_KEY = "vp-tracker-push";
+/* Идентификатор устройства. Нужен, чтобы у аккаунта не копились чужие
+   подписки: один iPhone, подписавшийся заново, оставлял старую строку,
+   и сервер слал одно уведомление дважды. */
+const DEVICE_KEY = "vp-tracker-device-id";
+const HEADERS_COL = "device_id"; // колонка в push_subscriptions (миграция 20261117)
+
+/* Устройство — случайный id, он же переживает перезагрузку и обновление. */
+function deviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (id && /^[a-z0-9-]{8,64}$/i.test(id)) return id;
+    id =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "dev-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem(DEVICE_KEY, id);
+    return id;
+  } catch {
+    /* приватный режим без хранилища: id на одну сессию, лучше чем ничего */
+    return "dev-" + Math.random().toString(36).slice(2, 12);
+  }
+}
 
 /* Публичный VAPID-ключ. Пара ключей лежит в Supabase → Edge Functions → Secrets
    (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY). Публичный можно показывать — он и должен
@@ -81,11 +103,26 @@ async function enablePush() {
       return;
     }
 
+    /* Одна строка на устройство: сначала убираем прежние подписки этого же
+       устройства (переустановка, смена endpoint), потом пишем текущую.
+       Чужие устройства не трогаем — по ним фильтр device_id. */
+    try {
+      await sb
+        .from("push_subscriptions")
+        .delete()
+        .eq("user_id", session.user.id)
+        .eq(HEADERS_COL, deviceId())
+        .neq("endpoint", sub.endpoint);
+    } catch (e) {
+      console.warn("Старые подписки этого устройства не убрались", e);
+    }
+
     const { error } = await sb.from("push_subscriptions").upsert(
       {
         user_id: session.user.id,
         endpoint: sub.endpoint,
         subscription: sub.toJSON(),
+        device_id: deviceId(),
         updated_at: new Date().toISOString(),
       },
       { onConflict: "endpoint" }
@@ -114,7 +151,8 @@ async function disablePush() {
     const sub = await reg.pushManager.getSubscription();
     if (sub) {
       if (typeof sb !== "undefined" && sb && typeof session !== "undefined" && session) {
-        sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint).then(() => {}, () => {});
+        await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+        await sb.from("push_subscriptions").delete().eq("user_id", session.user.id).eq(HEADERS_COL, deviceId());
       }
       await sub.unsubscribe();
     }

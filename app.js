@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v41";
+const BUILD_LABEL = "сборка v42";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -31,6 +31,93 @@ const cloneDeep = (obj) =>
     : JSON.parse(JSON.stringify(obj));
 
 let state = load();
+
+/* Какие дни реально менялись на этом устройстве и ещё не ушли на сервер.
+   Нужен, чтобы не отправлять все дни сразу: триггер days_touch переписывает
+   updated_at у каждой строки, и потом не понять, что менялось.
+   Живёт отдельно от state и переживает перезагрузку: пока не отправили,
+   файл не трогаем. */
+const DIRTY_KEY = "vp-tracker-dirty-days";
+
+function loadDirtyDays() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DIRTY_KEY) || "null");
+    return new Set(Array.isArray(raw) ? raw.filter((d) => typeof d === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+let dirtyDays = loadDirtyDays();
+let dirtyLoadedFromDisk = null;
+
+/* В первый запуск новой версии список пуст, а на устройстве могли остаться
+   дни, которые ещё не уехали на сервер (приложение жило без этого списка).
+   Один раз помечаем изменёнными все локальные дни — их и отправит первый же
+   проход. Дальше список ведём сами, поэтому повторно не срабатывает. */
+const DIRTY_MIGRATED_KEY = "vp-tracker-dirty-migrated-v1";
+
+function migrateDirtyDaysOnce() {
+  try {
+    if (localStorage.getItem(DIRTY_MIGRATED_KEY)) return 0;
+    const dates = Object.keys((state && state.hours) || {}).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    dates.forEach((d) => dirtyDays.add(d));
+    if (dates.length) saveDirtyDays();
+    localStorage.setItem(DIRTY_MIGRATED_KEY, "1");
+    return dates.length;
+  } catch {
+    return 0;
+  }
+}
+
+function saveDirtyDays() {
+  try {
+    localStorage.setItem(DIRTY_KEY, JSON.stringify([...dirtyDays]));
+  } catch {
+    /* ignore */
+  }
+}
+
+/* Пометить день изменённым. Тихо — без записи в хранилище, если он уже в списке. */
+function markDayDirty(dateKey) {
+  if (!dateKey) return;
+  const v = (dirtyVersion.get(dateKey) || 0) + 1;
+  dirtyVersion.set(dateKey, v);
+  if (dirtyDays.has(dateKey)) return;
+  dirtyDays.add(dateKey);
+  saveDirtyDays();
+}
+
+/* Снять дни с учёта после успешной отправки — но только если за время
+   запроса день не правили снова. Без версий получалась потеря правки:
+   стоп таймера приходил, пока уходил предыдущий пуш, отметка снималась
+   по старому ответу, и 40 минут оставались жить только на устройстве. */
+const dirtyVersion = new Map();
+
+function dirtyDaysVersion() {
+  return Object.fromEntries(dirtyVersion);
+}
+
+/* Снять дни с учёта после успешной отправки (версия — снимок на момент
+   отправки, см. dirtyDaysVersion). */
+function clearDirtyDays(list, sentVersions) {
+  let changed = false;
+  (list || []).forEach((d) => {
+    /* за время запроса день правили заново — оставляем его в списке */
+    if (sentVersions && dirtyVersion.has(d) && sentVersions[d] !== dirtyVersion.get(d)) return;
+    if (dirtyDays.delete(d)) {
+      changed = true;
+      dirtyVersion.delete(d);
+    }
+  });
+  if (changed) saveDirtyDays();
+}
+
+/* Всё, что пришло с сервера, тоже считается изменённым: иначе слияние
+   изменило бы минуты локально, а на сервер это не уехало бы. */
+function takeDirtyDates() {
+  return dirtyDays;
+}
 
 /* ─────────── таймер ───────────
    Таймер живёт в тех же данных, что и время: state.hours[дата][блок] = { min, timer }.
@@ -95,7 +182,7 @@ function writeMinutes(dateKey, blockId, minutes, opts) {
 
   /* день всё равно считается изменённым — mode и прочее едут вместе с ним */
   if (!opts || !opts.quiet) touchDay(dateKey);
-  save();
+  save(dateKey);
 }
 
 /* Отметка изменения минут блока. Время серверное (если знаем поправку),
@@ -120,17 +207,22 @@ function setBlockTimer(dateKey, blockId, startedAtIso) {
   /* byServer — отметку поставил сервер: такую нельзя сравнивать с локальными
      часами, а «остановкой» её гасит только ответ сервера */
   const mark = prev.timer && prev.timer.byServer;
+  /* minAt переживает и старт, и стоп: без него запись уходит на сервер
+     «правкой без отметки», и слияние не знает, чья версия новее — могло
+     вернуть 0 минут или, наоборот, затереть 40. */
+  const at = prev.minAt || 0;
+  const stamp = { ...(at ? { minAt: at } : {}) };
   if (!min && !startedAtIso) {
     /* пустой блок: и минуты ноль, и таймер выключен — держим только отметку */
-    day[blockId] = { min: 0, stoppedAt: new Date().toISOString() };
+    day[blockId] = { min: 0, stoppedAt: new Date().toISOString(), ...stamp };
   } else {
     day[blockId] = startedAtIso
-      ? { min, timer: mark ? { startedAt: startedAtIso, byServer: true } : { startedAt: startedAtIso } }
-      : { min, stoppedAt: new Date().toISOString() };
+      ? { min, timer: mark ? { startedAt: startedAtIso, byServer: true } : { startedAt: startedAtIso }, ...stamp }
+      : { min, stoppedAt: new Date().toISOString(), ...stamp };
   }
   if (!Object.keys(day).length) delete state.hours[dateKey];
   touchDay(dateKey);
-  save();
+  save(dateKey);
 }
 
 /* Больше 12 часов подряд — это забытый таймер: пишем максимум 12 ч и говорим вслух. */
@@ -190,6 +282,10 @@ var booting = true;
         toast(`Таймер по «${blockName(t.block)}» шёл слишком долго — записал ${fmtMinutes(add)}. Проверь время.`);
       }, 1200);
     });
+
+  /* Разово: всё, что есть на устройстве, считаем неотправленным. */
+  const migrated = typeof migrateDirtyDaysOnce === "function" ? migrateDirtyDaysOnce() : 0;
+  if (migrated) console.log("Дней помечено изменёнными при обновлении:", migrated);
 
   saveLocalOnly();
   if (moved) console.log("Мигрировано отметок в минуты:", moved);
@@ -276,9 +372,12 @@ function stampNow() {
   return typeof srvNowMs === "function" ? srvNowMs() : Date.now();
 }
 
-function save() {
+function save(dirtyDate) {
   saveLocalOnly();
   if (booting) return;
+  /* Какой день менялся — знает вызывающий (writeMinutes, setBlockTimer и т.п.).
+     Без явного указания отмечаем выбранный день: он и есть тот, что правят. */
+  if (typeof markDayDirty === "function") markDayDirty(dirtyDate || selectedDate);
   /* соседние вкладки читают то же хранилище — говорим им, что данные сменились */
   if (typeof tabAnnounce === "function") tabAnnounce("save");
   if (typeof refreshAchievements === "function") refreshAchievements();
@@ -447,8 +546,22 @@ function startTimer(blockId) {
 /* Стоп: тикающее время переезжает в записанные минуты.
    Если таймер серверный — минуты считает база и сама пишет их в день,
    локально мы только гасим отметку (иначе «+5 часов» со сбитых часов
-   телефона попали бы в минуты навсегда). */
+   телефона попали бы в минуты навсегда).
+
+   Порядок важен. Раньше отметка гасилась сразу, экран перерисовывался
+   с нулём, а минуты с сервера приходили через 0,2–1 с и писались в данные
+   без перерисовки — человек видел 0 при записанных 40. Теперь:
+   1) просим сервер остановить таймер (он считается по серверным часам);
+   2) когда ответ пришёл — пишем минуты и перерисовываем экран;
+   3) если сервер молчит или ответил ошибкой — падаем в локальную остановку:
+      считаем натикавшее по серверным часам и пишем сами, без двойного счёта.
+   Пока идёт запрос, отметка в state остаётся серверной: guard в timersync.js
+   (srvStopInFlight) не даёт фоновой сверке вернуть её обратно. */
 function stopTimer(dateKey, blockId) {
+  /* Второй клик по «стоп», пока ответ сервера в пути: таймер уже не наш,
+     и повторный timer_stop вернул бы «нет таймера» — с ложным тостом
+     «Меньше минуты». Просто игнорируем. */
+  if (typeof srvStopInFlight !== "undefined" && srvStopInFlight) return;
   const targets = [];
   if (blockId) targets.push({ date: dateKey || selectedDate, block: blockId });
   else runningTimers().forEach((t) => targets.push({ date: t.date, block: t.block }));
@@ -463,28 +576,65 @@ function stopTimer(dateKey, blockId) {
 
   /* ── серверные: спрашиваем базу, она вернёт посчитанные минуты ── */
   if (serverTargets.length && typeof timerStopRemote === "function") {
-    timerStopRemote().then((res) => {
-      if (!res || !res.stopped) return;
-      /* Минуты посчитала база — сразу переносим их в состояние. Иначе
-         ближайший пуш отправил бы на сервер старое (меньшее) число
-         и затёр то, что уже записано. */
-      if (Number.isFinite(Number(res.min))) {
-        /* отметка правки — из ответа базы, чтобы наше число минут было
-           свежее любых старых копий на других устройствах */
-        const at = Number(res.min_at) || (typeof srvNowMs === "function" ? srvNowMs() : Date.now());
-        touchMinutes(res.date, res.block, at);
-        writeMinutes(res.date, res.block, Number(res.min), { at });
-      }
-      if (typeof tabAnnounce === "function") tabAnnounce("stop", { date: res.date, block: res.block });
-      if (Number(res.elapsed_min) >= 1) {
-        toast(`Записано ${fmtMinutes(res.elapsed_min)}.`);
-        play("markGood");
-      } else {
-        toast("Меньше минуты — не записал.");
-      }
-    });
-    /* гасим отметку сразу, чтобы счётчик остановился на экране */
-    serverTargets.forEach(({ date, block }) => setBlockTimer(date, block, null));
+    const askedAt = typeof srvNowMs === "function" ? srvNowMs() : Date.now();
+    Promise.resolve(timerStopRemote())
+      .then((res) => {
+        if (res && res.stopped) {
+          /* Остальные цели (если стоп нажали без блока) просто гасим:
+             сервер вернул тот таймер, который у него шёл. */
+          serverTargets.forEach(({ date, block }) => {
+            if (date !== res.date || block !== res.block) setBlockTimer(date, block, null);
+          });
+          /* Минуты посчитала база — сразу переносим их в состояние. Иначе
+             ближайший пуш отправил бы на сервер старое (меньшее) число
+             и затёр то, что уже записано. */
+          if (Number.isFinite(Number(res.min)) && res.date && res.block) {
+            /* отметка правки — из ответа базы, чтобы наше число минут было
+               свежее любых старых копий на других устройствах */
+            const at = Number(res.min_at) || (typeof srvNowMs === "function" ? srvNowMs() : Date.now());
+            setBlockTimer(res.date, res.block, null);
+            touchMinutes(res.date, res.block, at);
+            writeMinutes(res.date, res.block, Number(res.min), { at });
+          }
+          if (typeof tabAnnounce === "function") tabAnnounce("stop", { date: res.date, block: res.block });
+          if (Number(res.elapsed_min) >= 1) {
+            toast(`Записано ${fmtMinutes(res.elapsed_min)}.`);
+            play("markGood");
+          } else {
+            toast("Меньше минуты — не записал.");
+          }
+          /* Главное в этой правке: экран обязан показать то, что записала база. */
+          renderAll();
+          return;
+        }
+        /* Сервер молчит или ответил «нет таймера» — останавливаем сами.
+           Минуты считаем по серверным часам: часы устройства могут врать. */
+        let total = 0;
+        serverTargets.forEach(({ date, block }) => {
+          const rec = blockRecord(date, block);
+          let min = Math.max(0, Math.floor((askedAt - (timerFor(date, block) || { startedAt: askedAt }).startedAt) / 60000));
+          if (min > TIMER_MAX_MIN) min = TIMER_MAX_MIN;
+          setBlockTimer(date, block, null);
+          writeMinutes(date, block, rec.min + min);
+          total += min;
+        });
+        if (total >= 1) toast(`Записано ${fmtMinutes(total)}. Сервер не ответил — сохранил по своим часам.`);
+        else toast("Меньше минуты — не записал.");
+        renderAll();
+      })
+      .catch(() => {
+        /* Сюда попадать не должны (timerStopRemote глотает ошибки сам),
+           но лучше остановить локально, чем оставить таймер висеть. */
+        serverTargets.forEach(({ date, block }) => {
+          const rec = blockRecord(date, block);
+          const t = timerFor(date, block);
+          const min = t ? Math.max(0, Math.floor((askedAt - t.startedAt) / 60000)) : 0;
+          setBlockTimer(date, block, null);
+          writeMinutes(date, block, rec.min + Math.min(min, TIMER_MAX_MIN));
+        });
+        renderAll();
+      });
+    return;
   }
 
   /* ── локальные (офлайн или старые данные): считаем сами ── */
@@ -826,7 +976,7 @@ function renderModes() {
     btn.addEventListener("click", () => {
       state.modes[selectedDate] = key;
       touchDay(selectedDate);
-      save();
+      save(selectedDate);
       renderAll();
       play("tick");
       toast(key === "bad" ? "Плохой день — цель просто что-то сделать." : m.hint);
@@ -866,7 +1016,7 @@ function toggleNamaz(dateKey, id) {
   const marked = Boolean(day[id]);
   if (!Object.keys(day).length) delete state.namaz[dateKey];
   touchDay(dateKey);
-  save();
+  save(dateKey);
   /* перерисовываем всё, где виден намаз: карточку, «Сейчас», расписание и счётчик.
      Раньше расписание не обновлялось — поэтому галочка появлялась только после
      перезагрузки, а повторный клик «не снимал» отметку. */
@@ -2149,6 +2299,43 @@ setInterval(tickTimerLabel, 1000);
    здесь простые локальные уведомления и тост, чтобы не пропустить. */
 const namazNotified = new Set();
 
+/* Отметка «уже показано» — в localStorage, а не только в памяти вкладки.
+   Иначе две открытые вкладки показывали одно и то же дважды, а перезагрузка
+   в ту же минуту — ещё раз. Ключ = событие + минута (например «2026-11-19:fajr:0»),
+   поэтому на следующий день и на следующее событие он другой. */
+const NAMAZ_SHOWN_KEY = "vp-tracker-namaz-shown-v1";
+
+function namazShownKey(key) {
+  return "namaz:" + key;
+}
+
+function namazWasShown(key) {
+  if (namazNotified.has(key)) return true;
+  try {
+    const raw = JSON.parse(localStorage.getItem(NAMAZ_SHOWN_KEY) || "{}");
+    return Boolean(raw && raw[namazShownKey(key)]);
+  } catch {
+    return false;
+  }
+}
+
+function namazMarkShown(key) {
+  namazNotified.add(key);
+  try {
+    const nowMin = Math.floor(Date.now() / 60000);
+    const raw = JSON.parse(localStorage.getItem(NAMAZ_SHOWN_KEY) || "{}");
+    const next = {};
+    /* старые записи (позавчерашние) не копим: храним только сегодняшние */
+    Object.keys(raw || {}).forEach((k) => {
+      if (raw[k] >= nowMin - 60 * 24) next[k] = raw[k];
+    });
+    next[namazShownKey(key)] = nowMin;
+    localStorage.setItem(NAMAZ_SHOWN_KEY, JSON.stringify(next));
+  } catch {
+    /* приватный режим — остаётся защита в памяти */
+  }
+}
+
 function namazTick() {
   if (typeof namazEnabled !== "function" || !namazEnabled()) return;
   const now = new Date();
@@ -2162,8 +2349,8 @@ function namazTick() {
     const p = night.plan;
     [[p.wake, `Подъём на фаджр — намаз в ${p.fajrTime}.`], [p.fajr, `Время фаджра — ${p.fajrTime}. До восхода ${p.sunriseTime}.`]].forEach(([at, text]) => {
       const key = `wake:${nowKey}:${at}`;
-      if (nowMin !== at || namazNotified.has(key)) return;
-      namazNotified.add(key);
+      if (nowMin !== at || namazWasShown(key)) return;
+      namazMarkShown(key);
       toast(text);
       if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
         try {
@@ -2180,8 +2367,8 @@ function namazTick() {
   namazDay(nowKey).forEach((p) => {
     [20, 0].forEach((ahead) => {
       const key = `${nowKey}:${p.id}:${ahead}`;
-      if (nowMin !== p.at - ahead || namazNotified.has(key)) return;
-      namazNotified.add(key);
+      if (nowMin !== p.at - ahead || namazWasShown(key)) return;
+      namazMarkShown(key);
       const text =
         ahead === 0
           ? `Время ${p.name} — ${p.time}.`

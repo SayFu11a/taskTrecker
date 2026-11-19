@@ -77,7 +77,39 @@ function runningMinutes(rec: unknown): number {
 }
 
 const minutesOf = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-const pad = (n: number) => String(n).padStart(2, "0");
+const pad = (n: string | number) => String(n).padStart(2, "0");
+
+/* Ключ устройства для дедупликации доставки. Дубли режутся по устройству,
+   а не по человеку: у одного человека Chrome и iPhone — два устройства, и
+   оба должны получить напоминание. Подписки без device_id (строки до
+   миграции) считаются отдельными устройствами по endpoint. */
+function deviceKeyOf(row: Record<string, unknown>): string {
+  return row.device_id ? "dev:" + String(row.device_id) : "ep:" + String(row.endpoint);
+}
+
+/* Напоминание нужно только в первом тике блока. Крон ходит раз в 15 минут,
+   поэтому «первый тик» — это mins в [from, from+15). */
+const SLOT_TICK_MIN = 15;
+function isFirstTick(mins: number, from: string): boolean {
+  return mins - minutesOf(from) < SLOT_TICK_MIN;
+}
+
+/* Блок «уже начат»: есть минуты, идёт таймер или стоит старая отметка уровня.
+   Идущий таймер считается начатым даже с нулём минут: человек уже занят
+   блоком, напоминать ему не о чем. */
+function timerRunning(rec: unknown): boolean {
+  if (!rec || typeof rec !== "object") return false;
+  const startedAt = (rec as { timer?: { startedAt?: string } }).timer?.startedAt;
+  if (!startedAt) return false;
+  return Number.isFinite(new Date(startedAt).getTime());
+}
+
+function blockStarted(rec: unknown, legacyLevel: unknown, minNeed: number): boolean {
+  if (timerRunning(rec)) return true;
+  const minutes = minutesOfRecord(rec) + runningMinutes(rec);
+  if (minutes > 0 && minutes >= minNeed) return true;
+  return Boolean(LEGACY_DONE[legacyLevel as string]) && Boolean(legacyLevel);
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -131,9 +163,16 @@ Deno.serve(async (req) => {
   /* Воскресенье — выходной (ручной прогон и тест — можно) */
   if (weekday === 6 && !isTest && !dry && !force) return json({ sent: 0, reason: "воскресенье" });
 
+  /* Напоминание — только в ПЕРВОМ тике блока (минуты в [from, from+15)),
+     иначе крон (раз в 15 минут) слал одно и то же на каждом тике, пока блок не набран.
+     Вместе с журналом reminder_log это даёт «одно напоминание на блок». */
   let slot = isTest
     ? TEST_SLOT
     : SLOTS.find((s) => mins >= minutesOf(s.from) && mins < minutesOf(s.to));
+
+  if (!isTest && slot && !force && !isFirstTick(mins, slot.from)) {
+    return json({ sent: 0, reason: "не первый тик блока", slot: slot.from, mins });
+  }
 
   if (force && !isTest) {
     slot = (slotParam ? SLOTS.find((s) => s.from === slotParam) : slot) ?? SLOTS[0];
@@ -142,7 +181,7 @@ Deno.serve(async (req) => {
   if (!slot) return json({ sent: 0, reason: "вне активных блоков", mins });
 
   /* Подписки: все (крон) или только свои (тест) */
-  let query = supabase.from("push_subscriptions").select("user_id, endpoint, subscription");
+  let query = supabase.from("push_subscriptions").select("user_id, endpoint, subscription, device_id");
   if (onlyUserId) query = query.eq("user_id", onlyUserId);
 
   const { data: subs, error } = await query;
@@ -170,14 +209,23 @@ Deno.serve(async (req) => {
     for (const row of days ?? []) {
       const userId = row.user_id as string;
       const hours = (row.hours ?? {}) as Record<string, unknown>;
-      let minutes = minutesOfRecord(hours[slot.block]) + runningMinutes(hours[slot.block]);
-
       /* строки, записанные до перехода на минуты, содержат только blocks с уровнями */
       const legacy = (row.blocks ?? {}) as Record<string, string>;
-      if (!minutes && LEGACY_DONE[legacy[slot.block]]) minutes = minNeed;
-
-      if (minutes >= minNeed && minutes > 0) skip.add(userId);
+      if (blockStarted(hours[slot.block], legacy[slot.block], minNeed)) skip.add(userId);
     }
+  }
+
+  /* Один раз за блок: в reminder_log пишем (пользователь, дата, блок),
+     повторная отправка в тот же блок в тот же день не делается.
+     force=1 (ручной прогон) журнал игнорирует. */
+  if (!isTest && !force && slot.block !== "__test__" && ids.length) {
+    const { data: logRows } = await supabase
+      .from("reminder_log")
+      .select("user_id")
+      .eq("date", dateKey)
+      .eq("slot", slot.block)
+      .in("user_id", ids);
+    for (const row of logRows ?? []) skip.add(row.user_id as string);
   }
 
   const targets = (subs ?? []).filter((r) => !skip.has(r.user_id as string));
@@ -197,14 +245,18 @@ Deno.serve(async (req) => {
   let sent = 0;
   let removed = 0;
   const failures: string[] = [];
-
+  const sentTo = new Set<string>();
   for (const row of targets) {
+    /* дубли режутся по устройству, а не по человеку (см. deviceKeyOf) */
+    const key = deviceKeyOf(row as Record<string, unknown>);
+    if (sentTo.has(key)) continue;
     try {
       await webpush.sendNotification(
         row.subscription as never,
         JSON.stringify({ title: slot.title, body: slot.body, tag: `vp-${slot.from}`, url: "./" })
       );
       sent++;
+      sentTo.add(key);
     } catch (e) {
       const status = (e as { statusCode?: number }).statusCode;
       if (status === 404 || status === 410) {
@@ -214,6 +266,19 @@ Deno.serve(async (req) => {
         failures.push(`${status ?? "?"}: ${(e as Error).message}`);
       }
     }
+  }
+
+  /* Запоминаем, кому уже напомнили. Если запись не удалась — не страшно:
+     следующий тик попробует снова, а дублей всё равно не будет из-за
+     «только первый тик». В журнале — люди, которым доставка реально ушла
+     (хотя бы на одно устройство). */
+  const notified = new Set<string>();
+  for (const row of targets) if (sentTo.has(deviceKeyOf(row as Record<string, unknown>))) notified.add(row.user_id as string);
+  if (!isTest && notified.size) {
+    await supabase.from("reminder_log").upsert(
+      [...notified].map((uid) => ({ user_id: uid, date: dateKey, slot: slot.block })),
+      { onConflict: "user_id,date,slot" }
+    );
   }
 
   return json({ sent, removed, slot: slot.from, date: dateKey, failures });

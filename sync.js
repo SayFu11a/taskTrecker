@@ -19,6 +19,67 @@ let pushTimer = null;
 let lastAuthError = null; // ошибка возврата после входа — показывается на экране аккаунта
 let authPending = false; // SDK ещё грузится — чтобы блок не был пустым
 
+/* ─────────── один вход для всех сигналов «пора синхронизироваться» ───────────
+   Фокус, возврат во вкладку, online, SIGNED_IN и realtime раньше дёргали
+   синхронизацию каждый сам по себе: за 6 секунд возврата набегало 6 запросов
+   статуса таймера, а realtime переподключался дважды. Теперь все сигналы
+   идут через requestSync(): не чаще одного запуска за SYNC_MIN_GAP мс,
+   лишние вызовы схлопываются в один отложенный. */
+const SYNC_MIN_GAP = 10000; // 10 секунд между запусками
+/* Полная сверка дней — самый дорогой проход (select всех дней + settings).
+   Сигналов «пора свериться» много, и они повторяются, поэтому сам проход
+   тоже не чаще раза в минуту; экстренные случаи идут с force. */
+const SYNC_MIN_FULL_GAP = 60000;
+/* Сверка тянет за собой ещё сверку таймера, а та — ещё одну: без общей
+   шины получалось 4–6 timer_status на одно «вернулся во вкладку».
+   Счётчик в окне 10 с схлопывает всё это в один проход. */
+const STATUS_MIN_GAP = 10000;
+let statusLastAt = 0;
+function syncTimerThrottled() {
+  const now = Date.now();
+  if (now - statusLastAt < STATUS_MIN_GAP) return false;
+  statusLastAt = now;
+  return true;
+}
+let syncLastRunAt = 0;
+let syncQueuedTimer = null;
+let syncQueuedAt = 0;
+let syncLastSessionId = null; // чтобы SIGNED_IN на ту же сессию не стартовал заново
+
+function syncCooldownLeft() {
+  return Math.max(0, SYNC_MIN_GAP - (Date.now() - syncLastRunAt));
+}
+
+/* why — только для отладки в консоли, на поведение не влияет. */
+let pullLastAt = 0;
+
+function requestSync(why, { force = false } = {}) {
+  if (!sb || !session) return;
+  if (typeof syncBusy !== "undefined" && syncBusy) return;
+  /* проход был меньше минуты назад и его не просят срочно — не повторяем */
+  if (!force && pullLastAt && Date.now() - pullLastAt < SYNC_MIN_FULL_GAP) return;
+
+  const left = force ? 0 : syncCooldownLeft();
+  if (!left) {
+    if (syncQueuedTimer) {
+      clearTimeout(syncQueuedTimer);
+      syncQueuedTimer = null;
+    }
+    syncLastRunAt = Date.now();
+    if (typeof console !== "undefined") console.debug && console.debug("[sync]", why);
+    pullLastAt = Date.now();
+    pullThenPush();
+    return;
+  }
+  /* уже запланировано раньше — второй таймер не заводим */
+  if (syncQueuedTimer) return;
+  syncQueuedAt = Date.now();
+  syncQueuedTimer = setTimeout(() => {
+    syncQueuedTimer = null;
+    requestSync(why + ":догон", { force: true });
+  }, left + 50);
+}
+
 function syncConfigured() {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
@@ -33,6 +94,7 @@ async function initSync() {
 
   authPending = true;
   renderAccount(); // сразу показываем «подключаю», а не пустую плашку
+  let clientCreated = false;
 
   try {
     /* SDK грузим динамически: без настроенного Supabase лишних запросов нет.
@@ -45,6 +107,7 @@ async function initSync() {
     sb = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
+    clientCreated = true;
 
     /* Подписку ставим ДО обмена кода: иначе SIGNED_IN от обмена
        пройдёт мимо обработчика и синхронизация не запустится. */
@@ -52,7 +115,19 @@ async function initSync() {
       session = newSession;
       renderAccount();
       if (typeof renderPushBox === "function") renderPushBox();
-      if (event === "SIGNED_IN") pullThenPush();
+      if (event === "SIGNED_IN") {
+        /* Supabase присылает SIGNED_IN и при каждом возврате во вкладку,
+           и при обновлении токена. Если человек тот же — синхронизация уже
+           идёт или только что прошла, второй раз не нужно. */
+        const uid = newSession && newSession.user ? newSession.user.id : null;
+        const sameSession = uid && uid === syncLastSessionId;
+        syncLastSessionId = uid;
+        if (!sameSession) requestSync("signed-in", { force: true });
+      }
+      if (event === "SIGNED_OUT") {
+        syncLastSessionId = null;
+        syncLastRunAt = 0;
+      }
     });
 
     await reportOauthError();
@@ -66,12 +141,18 @@ async function initSync() {
 
     if (session) {
       await pullThenPush();
+      /* окно 10 с — внутри timerSyncFromServer: каждый сигнал раньше
+         приносил свой timer_status */
       if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
     }
     else if (hasLocalData()) await maybeOfferMigration();
   } catch (e) {
     console.warn("Синхронизация недоступна", e);
-    sb = null;
+    /* Обнуляем только НЕудавшуюся попытку. Если клиент уже создан, а
+       сорвалось что-то после (обмен кода, первый проход), обнулять его
+       нельзя: серверный таймер и намаз молча уходят в локальный режим до
+       перезагрузки — то есть «синхронизация недоступна» на живой связи. */
+    if (!clientCreated) sb = null;
   } finally {
     authPending = false;
     renderAccount();
@@ -122,24 +203,31 @@ function hasLocalData() {
    В поле hours уходит { блок: { min, timer: { startedAt } } } — записанные
    минуты и, если таймер идёт, время его запуска. Тогда таймер переживает
    перезагрузку и виден на других устройствах. */
-function stateToRows(userId) {
+/* Отправляем только изменённые дни. Раньше на сервер уходили ВСЕ дни при
+   каждой отправке, и триггер days_touch переписывал updated_at у всех строк —
+   по этой отметке потом не понять, что реально менялось. now=false (по
+   умолчанию) — забираем список грязных дат и очищаем его; now=true —
+   отдаём вообще все дни (нужно для разовой миграции/первой загрузки). */
+function stateToRows(userId, { all = false } = {}) {
   const meta = state.meta || {};
   const dates = Object.keys(state.hours || {}).filter((d) => {
     const day = state.hours[d] || {};
     return Object.keys(day).length > 0;
   });
+  const dirty = typeof takeDirtyDates === "function" ? takeDirtyDates() : null;
+  const picked = all || !dirty ? dates : dates.filter((d) => dirty.has(d));
 
-  return dates.map((date) => ({
+  return picked.map((date) => ({
     user_id: userId,
     date,
-    hours: normalizeDayForDb(state.hours[date]),
+    hours: normalizeDayForDb(state.hours[date], (state.minAt || {})[date]),
     mode: (state.modes || {})[date] || null,
     updated_at: new Date(meta[date] || Date.now()).toISOString(),
   }));
 }
 
 /* Число минут → { min } — один формат в базе, чтобы слияние было предсказуемым. */
-function normalizeDayForDb(day) {
+function normalizeDayForDb(day, minAtFallback) {
   const out = {};
   Object.keys(day || {}).forEach((id) => {
     const rec = day[id];
@@ -151,14 +239,21 @@ function normalizeDayForDb(day) {
     const min = Number(rec.min) || 0;
     const startedAt = rec.timer && rec.timer.startedAt;
     /* Ноль минут — это тоже правка («удалил часы»): её нельзя выбрасывать,
-       иначе удаление не доедет до сервера и вернётся с другого устройства. */
-    const minAt = Number(rec.minAt) || 0;
+       иначе удаление не доедет до сервера и вернётся с другого устройства.
+       Если отметки нет в самой записи, берём её из state.minAt: иначе при
+       остановке таймера запись оставалась без minAt, и слияние не знало,
+       чья правка новее. */
+    const minAt = Number(rec.minAt) || Number((minAtFallback || {})[id]) || 0;
     if (!min && !startedAt && !minAt && !rec.stoppedAt) return;
+    /* Ноль минут без отметки и с идущим серверным таймером — это «ещё не
+       пришли минуты с сервера», а не правка. Отправили бы min: 0 и затёрли
+       записанное. Ждём ответа timer_stop, он и принесёт минуты и minAt. */
+    if (!min && !minAt && startedAt && rec.timer && rec.timer.byServer) return;
     out[id] = { min };
-    if (startedAt) {
+    /* Серверный таймер не отправляем: он уже на сервере, а локальная копия
+       минус минуты после стопа (min: 0) затёрла бы записанное. */
+    if (startedAt && !(rec.timer && rec.timer.byServer)) {
       out[id].timer = { startedAt };
-      /* отметку поставил сервер — другим устройствам это важно знать */
-      if (rec.timer && rec.timer.byServer) out[id].timer.byServer = true;
     }
     /* когда меняли минуты — по этому полю договариваются устройства */
     if (minAt) out[id].minAt = minAt;
@@ -258,6 +353,11 @@ function mergeRowsIntoState(rows) {
   state.meta = state.meta || {};
   state.hours = state.hours || {};
 
+  /* Если слияние оставило локальное значение (например, стоп с другого
+     устройства ещё не уехал), день надо отправить обратно — но только
+     такой день, а не все пришедшие: иначе пуш раздувался до всего списка. */
+  const localWins = new Set();
+
   rows.forEach((row) => {
     const remoteTs = new Date(row.updated_at).getTime() || 0;
     const localTs = state.meta[row.date] || 0;
@@ -284,19 +384,34 @@ function mergeRowsIntoState(rows) {
         if (at > (Number(dayAt[id]) || 0)) dayAt[id] = at;
       });
       if (!Object.keys(dayAt).length) delete state.minAt[row.date];
+
+      const remoteNorm = remoteHours || {};
+      Object.keys(merged).forEach((id) => {
+        const mine = Number(merged[id] && merged[id].min) || 0;
+        const srvRec = remoteNorm[id];
+        if (srvRec === undefined) return; // блока нет на сервере — это пусто, не расхождение
+        const srvMin = typeof srvRec === "number" ? srvRec : Number(srvRec && srvRec.min) || 0;
+        if (mine !== srvMin) localWins.add(row.date);
+      });
     }
 
     /* meta двигаем только если сервер реально новее — иначе локальная
        правка перетрёт следующую отправку своим «старым» временем */
     if (remoteTs > localTs) state.meta[row.date] = remoteTs;
   });
+
+  if (localWins.size && typeof markDayDirty === "function") {
+    localWins.forEach((d) => markDayDirty(d));
+  }
 }
 
 async function pullThenPush() {
   if (!sb || !session) return;
   if (syncBusy) return;
   syncBusy = true;
+  pullLastAt = Date.now();
 
+  let ok = false;
   try {
     const { data, error } = await sb
       .from("days")
@@ -314,18 +429,29 @@ async function pullThenPush() {
     await pushAll();
     await pullSettings();
     /* Таймер — серверный: именно он решает, идёт он или уже погашен */
+    /* окно 10 с — внутри timerSyncFromServer: каждый сигнал раньше
+       приносил свой timer_status */
     if (typeof timerSyncFromServer === "function") await timerSyncFromServer();
+    if (session && session.user) syncLastSessionId = session.user.id;
     toast("Синхронизировано");
+    ok = true;
   } catch (e) {
     console.warn("Не удалось синхронизировать", e);
     toast("Нет связи с сервером — работаем локально.");
   } finally {
     syncBusy = false;
+    /* Проход сорвался (нет сети) — окно «не чаще раза в минуту» снимаем:
+       иначе вернувшаяся сеть упрётся в него, и правки будут ждать. */
+    if (!ok) pullLastAt = 0;
   }
 }
 
-async function pushAll() {
+async function pushAll({ all = false } = {}) {
   if (!sb || !session) return;
+  /* Идёт timer_stop: локальные минуты ещё не пришли, а серверный таймер
+     уже не наш. Отправили бы min: 0 с идущим таймером и затёрли запись.
+     Отложим — writeMinutes после ответа сам вызовет syncSoon(). */
+  if (typeof srvStopInFlight !== "undefined" && srvStopInFlight) return;
 
   /* Если таймер только что остановила база, она уже записала минуты в день.
      Пуш со старым (меньшим) числом затёр бы их — поэтому сначала забираем
@@ -338,16 +464,65 @@ async function pushAll() {
     }
   }
 
-  const rows = stateToRows(session.user.id);
+  /* Только изменённые дни. Пустую отправку не делаем: раньше каждый клик
+     отправлял все дни, триггер days_touch переписывал updated_at у всех строк,
+     и по отметке нельзя было понять, что реально менялось.
+     Исключение — all: разовая выгрузка всех дней при входе/миграции. */
+  const rows = stateToRows(session.user.id, { all });
   if (!rows.length) return;
+  /* версии «кто правил день» на момент сборки строк: без них ответ сервера
+     снимал бы отметку и с дня, который успели изменить, пока запрос летел */
+  const sentVersions = typeof dirtyDaysVersion === "function" ? dirtyDaysVersion() : null;
 
   const { error } = await sb.from("days").upsert(rows, { onConflict: "user_id,date" });
-  if (error) throw error;
+  if (error) {
+    /* не ушло — дни снова считаются изменёнными, иначе правка потеряется */
+    if (typeof markDayDirty === "function") rows.forEach((r) => markDayDirty(r.date));
+    throw error;
+  }
+  if (typeof clearDirtyDays === "function") clearDirtyDays(rows.map((r) => r.date), sentVersions);
 }
 
-/* Настройки — отдельная строка. */
-async function pushSettings() {
+/* Настройки — отдельная строка. Отправляем, только если они реально
+   менялись с прошлой удачной отправки: раньше каждый проход сверки слал
+   settings.upsert с тем же содержимым, и триггер двигал updated_at. */
+const SETTINGS_PUSH_KEY = "vp-tracker-settings-pushed-v1";
+let settingsPushedSnapshot = null;
+
+function settingsSnapshot() {
+  return JSON.stringify({
+    week: state.week,
+    schedule_view: state.scheduleView,
+    achievements: state.achievements || {},
+    leetcode: state.leetcode || [],
+    namaz_on: state.namazOn !== false,
+    gym: state.gym || {},
+  });
+}
+
+function settingsPushedBefore() {
+  if (settingsPushedSnapshot === null) {
+    try {
+      settingsPushedSnapshot = localStorage.getItem(SETTINGS_PUSH_KEY) || "";
+    } catch {
+      settingsPushedSnapshot = "";
+    }
+  }
+  return settingsPushedSnapshot === settingsSnapshot();
+}
+
+function noteSettingsPushed() {
+  settingsPushedSnapshot = settingsSnapshot();
+  try {
+    localStorage.setItem(SETTINGS_PUSH_KEY, settingsPushedSnapshot);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function pushSettings({ force = false } = {}) {
   if (!sb || !session) return;
+  if (!force && settingsPushedBefore()) return;
   try {
     const { error } = await sb.from("settings").upsert(
       {
@@ -370,7 +545,9 @@ async function pushSettings() {
       console.warn("Настройки не ушли", error);
       lastAuthError = "Настройки не сохранились на сервере: " + (error.message || "ошибка");
       renderAccount();
+      return;
     }
+    noteSettingsPushed();
   } catch (e) {
     console.warn("Настройки не ушли", e);
   }
@@ -381,7 +558,7 @@ async function pullSettings() {
   try {
     const { data } = await sb.from("settings").select("*").eq("user_id", session.user.id).maybeSingle();
     if (!data) {
-      await pushSettings();
+      await pushSettings({ force: true });
       return;
     }
     if (typeof data.week === "number") state.week = data.week;
@@ -406,6 +583,8 @@ async function pullSettings() {
     if (data.gym && typeof data.gym === "object" && !Array.isArray(data.gym)) {
       state.gym = mergeGym(state.gym || {}, data.gym);
     }
+    /* то, что пришло с сервера, повторно отправлять не нужно */
+    noteSettingsPushed();
     saveLocalOnly();
     renderAll();
   } catch (e) {
@@ -444,16 +623,17 @@ window.addEventListener("online", () => {
   } catch {
     /* ignore */
   }
-  if (pending) syncSoon();
+  /* force: сеть вернулась — это редкое и важное событие. Через обычное окно
+     его отбрасывало «проход был меньше минуты назад», и правки, сделанные
+     без сети, ждали следующего сигнала. */
+  if (pending) requestSync("online", { force: true });
 });
 
-/* Вернулись во вкладку — подтягиваем изменения с других устройств. */
+/* Вернулись во вкладку — подтягиваем изменения с других устройств.
+   Через планировщик: иначе на каждое возвращение уходило до 6 запросов. */
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
-  /* Открыли вкладку/вернулись с телефона — сначала спрашиваем сервер про
-     таймер: он мог быть остановлен на другом устройстве. */
-  if (typeof timerSyncFromServer === "function") timerSyncFromServer();
-  if (sb && session && !syncBusy) pullThenPush();
+  requestSync("visibility");
 });
 
 /* ─────────── ошибки возврата после входа ─────────── */

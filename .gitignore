@@ -1,2 +1,3 @@
 # Собирается на Vercel командой node scripts/build-public.mjs
 public/
+node_modules/

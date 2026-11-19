@@ -1,0 +1,13 @@
+{
+  "name": "tasktrecker",
+  "private": true,
+  "type": "module",
+  "description": "Трекер: статический сайт + регрессионные тесты таймера и синхронизации",
+  "scripts": {
+    "test": "node tests/run-tests.mjs",
+    "build": "node scripts/build-public.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

@@ -375,7 +375,29 @@
     { name: "ai_analyses", order: "id", apply: (r) => mergeAnalysis(fromAnalysis(r)) },
   ];
 
-  async function pullAll(u) {
+  /* Pull четырёх таблиц — самая дорогая часть сверки (4 запроса за проход).
+     Если с прошлой сверки прошла минута и локальных правок нет, ничего не
+     изменилось и на сервере: не дёргаем. Ключ переживает перезагрузку. */
+  const PULL_KEY = "vp-diary-last-pull-v1";
+  const PULL_GAP_MS = 60 * 1000;
+
+  function pullRecent() {
+    try {
+      const t = Number(localStorage.getItem(PULL_KEY)) || 0;
+      return Date.now() - t < PULL_GAP_MS;
+    } catch {
+      return false;
+    }
+  }
+  function notePull() {
+    try {
+      localStorage.setItem(PULL_KEY, String(Date.now()));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function pullAll(u, { force = false } = {}) {
     const c = client();
     let changed = false;
     for (const t of TABLES) {
@@ -391,6 +413,7 @@
       }
       DB.cursor[t.name] = iso(maxMs || 0);
     }
+    notePull();
     return changed;
   }
 
@@ -460,7 +483,10 @@
     try {
       setStatus("sync");
       const u = s.user.id;
-      const changed = await pullAll(u);
+      /* Локальные правки надо сначала отправить, потом забирать чужое;
+         если правок нет и сверялись меньше минуты назад — pull не нужен. */
+      const mustPull = anyDirty() || !pullRecent();
+      const changed = mustPull ? await pullAll(u) : false;
       await pushAll(u);
       persist();
       V.noTables = false;
