@@ -2214,8 +2214,144 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 
 /* ─────────────── рендер ─────────────── */
 
+
+/* ─────────────── мысль дня ─────────────── */
+
+/* Настройки — только в этом браузере: на сервер не уходят, синхронизацию
+   и дневник не трогают. По умолчанию цитаты и аят включены, хадис — нет. */
+const DAILY_KEY = "vp-tracker-daily";
+
+function dailyPrefs() {
+  const def = { quotes: true, ayat: true, hadith: false };
+  try {
+    const raw = JSON.parse(localStorage.getItem(DAILY_KEY) || "null");
+    if (!raw || typeof raw !== "object") return def;
+    return {
+      quotes: raw.quotes !== false,
+      ayat: raw.ayat !== false,
+      hadith: raw.hadith === true,
+    };
+  } catch {
+    return def;
+  }
+}
+
+function setDailyPref(name, on) {
+  if (!["quotes", "ayat", "hadith"].includes(name)) return;
+  const next = dailyPrefs();
+  next[name] = !!on;
+  try {
+    localStorage.setItem(DAILY_KEY, JSON.stringify(next));
+  } catch {
+    /* приватный режим — просто не запомнится */
+  }
+}
+
+/* Карточка «Мысль дня». Считается от текущей даты, а не от выбранной:
+   это мысль на сегодня, а не на день, который открыт в календаре. */
+function renderDailyCard() {
+  const root = document.getElementById("dailyCard");
+  if (!root) return;
+
+  const prefs = dailyPrefs();
+  const data =
+    typeof dailyForDate === "function" ? dailyForDate(new Date(), prefs) : null;
+  const thought = data && data.thought;
+  const ayah = data && data.ayah;
+  const hadith = data && data.hadith;
+
+  if (!thought && !ayah && !hadith) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+
+  const parts = [];
+  parts.push('<div class="daily-head"><span class="daily-pill">Мысль дня</span></div>');
+
+  if (thought) {
+    parts.push(`<p class="daily-thought">${escapeHtml(thought.text)}</p>`);
+    if (thought.src) {
+      parts.push(`<p class="daily-src">${escapeHtml(thought.src)}</p>`);
+    }
+  }
+
+  /* tip — это не аят и не перевод: он идёт отдельной мелкой серой строкой
+     и только тогда, когда в данных есть. */
+  if (ayah) {
+    const label = typeof ayahLabel === "function" ? ayahLabel(ayah) : `${ayah.s}:${ayah.from}`;
+    const link = typeof ayahLink === "function" ? ayahLink(ayah) : "";
+    parts.push('<div class="daily-ayah">');
+    if (ayah.ar) {
+      parts.push(
+        `<p class="daily-ar" lang="ar" dir="rtl">${escapeHtml(ayah.ar)}</p>`
+      );
+    }
+    parts.push(
+      `<p class="daily-meaning">${escapeHtml(ayah.meaning)}</p>`
+    );
+    parts.push(
+      `<p class="daily-caption">смысл аята · <a class="daily-link" href="${escapeHtml(
+        link
+      )}" target="_blank" rel="noopener">${escapeHtml(label)}</a></p>`
+    );
+    if (ayah.tip) {
+      parts.push(`<p class="daily-tip">${escapeHtml(ayah.tip)}</p>`);
+    }
+    parts.push("</div>");
+  }
+
+  if (hadith) {
+    parts.push(`<div class="daily-hadith">`);
+    parts.push(`<p class="daily-thought daily-thought-sm">${escapeHtml(hadith.text)}</p>`);
+    if (hadith.src) {
+      parts.push(`<p class="daily-src">${escapeHtml(hadith.src)}</p>`);
+    }
+    parts.push(`</div>`);
+  }
+
+  root.innerHTML = parts.join("");
+  root.hidden = false;
+}
+
+/* Переключатели в профиле. */
+function renderDailyBox() {
+  const root = document.getElementById("dailyBox");
+  if (!root) return;
+  const p = dailyPrefs();
+  const rows = [
+    ["quotes", "Цитаты и советы", "Мысль дня: короткая цитата или совет."],
+    ["ayat", "Аят дня", "Аят с арабским текстом и смыслом на русском."],
+    ["hadith", "Хадис дня", "Короткий хадис с источником."],
+  ];
+
+  root.innerHTML = rows
+    .map(
+      ([name, title, sub]) => `
+    <div class="acc-row daily-toggle">
+      <span class="acc-dot ${p[name] ? "on" : "off"}"></span>
+      <div>
+        <div class="acc-title">${title}</div>
+        <div class="acc-sub">${p[name] ? "Включено." : "Выключено."} ${sub}</div>
+      </div>
+      <button class="ghost-btn acc-btn" data-daily="${name}">${p[name] ? "Выключить" : "Включить"}</button>
+    </div>`
+    )
+    .join("");
+
+  root.querySelectorAll("[data-daily]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.getAttribute("data-daily");
+      setDailyPref(name, !dailyPrefs()[name]);
+      renderDailyBox();
+      renderDailyCard();
+    });
+  });
+}
+
 function renderAll() {
   if (typeof namazSync === "function" && namazEnabled()) namazSync(selectedDate);
+  renderDailyCard();
   if (typeof renderNamaz === "function") renderNamaz();
   renderModes();
   renderBlocks();
@@ -2237,6 +2373,7 @@ renderAll();
 
 initAudioOnFirstGesture();
 renderSfxBox();
+renderDailyBox();
 renderPushBox();
 
 /* Достижения, заработанные до этой версии, отмечаем молча:

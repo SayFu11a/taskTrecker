@@ -1840,3 +1840,116 @@ input::placeholder { color: #626880; }
   .tl-namaz { grid-template-columns: 20px 1fr; padding: 10px; }
   .tl-namaz-scale { grid-column: 1 / -1; justify-content: flex-start; margin-top: 4px; }
 }
+
+/* ─────────── мысль дня ─────────── */
+
+.daily-card {
+  margin-bottom: 14px;
+  padding: 18px 20px;
+}
+
+.daily-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.daily-pill {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.daily-thought {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.daily-thought-sm {
+  font-size: 15px;
+}
+
+.daily-src {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.daily-ayah {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* Арабская вязь: крупнее, справа налево, с запасом по высоте —
+   у неё высокая диакритика, обычный интервал её обрезает. */
+.daily-ar {
+  margin: 0 0 10px;
+  font-family: "Amiri", "Scheherazade New", "Traditional Arabic", "Noto Naskh Arabic",
+    "KFGQPC Uthmanic Script HAFS", serif;
+  font-size: 25px;
+  line-height: 2;
+  text-align: right;
+  color: var(--text);
+}
+
+.daily-meaning {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.daily-caption {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.daily-link {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.daily-link:hover {
+  color: var(--text);
+}
+
+/* Совет — отдельная мелкая серая строка, это не часть аята */
+.daily-tip {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.daily-hadith {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.daily-toggle {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.daily-toggle .acc-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 520px) {
+  .daily-ar { font-size: 22px; }
+  .daily-card { padding: 16px; }
+}

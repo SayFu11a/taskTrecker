@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 /* Корень репозитория — рядом с этим файлом, чтобы тесты работали из любого места. */
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") + path.sep;
-export const FILES = ["data.js","namaz.js","sound.js","achievements.js","sync.js","timersync.js","tabsync.js","push.js","app.js","diary.js","levels.js","glass.js"];
+export const FILES = ["data.js","quotes.js","namaz.js","sound.js","achievements.js","sync.js","timersync.js","tabsync.js","push.js","app.js","diary.js","levels.js","glass.js"];
 
 /* ───── сервер ───── */
 export function makeServer(clockRef = null) {
