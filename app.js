@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v44";
+const BUILD_LABEL = "сборка v45";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -2484,10 +2484,19 @@ function renderDailyCard() {
   }
 
   if (hadith) {
+    /* У хадиса поле называется meaning, а не text — в отличие от цитаты.
+       Именно на этом карточка однажды показала «undefined». Берём первое
+       непустое из обоих: данные могут прийти и в старом формате. */
+    const hadithText = hadith.meaning || hadith.text || "";
     parts.push(`<div class="daily-hadith">`);
-    parts.push(`<p class="daily-thought daily-thought-sm">${escapeHtml(hadith.text)}</p>`);
+    if (hadithText) {
+      parts.push(`<p class="daily-thought daily-thought-sm">${escapeHtml(hadithText)}</p>`);
+    }
     if (hadith.src) {
       parts.push(`<p class="daily-src">${escapeHtml(hadith.src)}</p>`);
+    }
+    if (hadith.tip) {
+      parts.push(`<p class="daily-tip">${escapeHtml(hadith.tip)}</p>`);
     }
     parts.push(`</div>`);
   }

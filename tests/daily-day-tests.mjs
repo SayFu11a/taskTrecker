@@ -168,6 +168,50 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     ok(/\.daily-toggle-btn\s*\{[^}]*width:\s*100%/.test(css), "кнопка не на всю ширину");
   });
 
+  test("мысль дня: хадис показывает текст, а не undefined", async () => {
+    /* У хадиса поле называется meaning, у цитаты — text. Когда карточка
+       читала hadith.text, на экране появлялось слово «undefined».
+       Здесь проверяем настоящий рендер: включаем только хадис. */
+    const { w } = await boot();
+    w.eval(`(function(){
+      localStorage.setItem("vp-tracker-daily", JSON.stringify({ quotes: false, ayat: false, hadith: true }));
+    })()`);
+    w.eval("renderDailyCard()");
+
+    const card = w.document.getElementById("dailyCard");
+    ok(!card.hidden, "карточка скрыта, хотя хадис включён");
+
+    const box = card.querySelector(".daily-hadith");
+    ok(box, "хадиса в карточке нет");
+
+    const text = (box.querySelector(".daily-thought") || {}).textContent || "";
+    ok(text.trim().length > 10, `текста хадиса нет: «${text}»`);
+    ok(!/undefined/.test(box.textContent), "в карточке снова «undefined»");
+    ok(!/undefined/.test(card.textContent), "«undefined» где-то в карточке");
+
+    /* источник на месте: у хадисов в src стоит сборник и номер */
+    const src = (box.querySelector(".daily-src") || {}).textContent || "";
+    ok(src.trim().length > 5, `нет источника хадиса: «${src}»`);
+  });
+
+  test("мысль дня: ни один текст карточки не превращается в undefined", async () => {
+    /* Общий предохранитель на все три вида: гоняем 60 дней с включённым
+       хадисом и проверяем, что в разметке ни разу нет «undefined». */
+    const { w } = await boot();
+    const dirty = w.eval(`(function(){
+      const bad = [];
+      for (let i = 0; i < 60; i++) {
+        const d = new Date(2026, 0, 1 + i, 12);
+        const data = dailyForDate(d, { quotes: true, ayat: true, hadith: true });
+        if (data.hadith && !(data.hadith.meaning || data.hadith.text)) bad.push("hadith:" + data.hadith.id);
+        if (data.thought && !data.thought.text) bad.push("thought:" + data.thought.id);
+        if (data.ayah && !data.ayah.meaning) bad.push("ayah:" + data.ayah.id);
+      }
+      return bad;
+    })()`);
+    eq(dirty, [], "у части записей нет текста — карточка покажет undefined");
+  });
+
   test("мысль дня: настройки не уходят на сервер", async () => {
     const { server, w } = await boot();
     const before = server.S.calls.length;
