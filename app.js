@@ -2480,6 +2480,11 @@ function renderDailyCard() {
     if (ayah.tip) {
       parts.push(`<p class="daily-tip">${escapeHtml(ayah.tip)}</p>`);
     }
+    /* note — оговорка про спорное толкование (у 94:7–8 толкователи расходятся).
+       Не показывать её нельзя: смысл подан как единственный, а это не так. */
+    if (ayah.note) {
+      parts.push(`<p class="daily-note">${escapeHtml(ayah.note)}</p>`);
+    }
     parts.push("</div>");
   }
 

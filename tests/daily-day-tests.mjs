@@ -212,6 +212,29 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     eq(dirty, [], "у части записей нет текста — карточка покажет undefined");
   });
 
+  test("мысль дня: оговорка о толковании аята показывается", async () => {
+    /* У 94:7–8 толкователи расходятся; в данных это поле note. Если его
+       не показать, смысл выглядит единственно верным — это неправда. */
+    const { w } = await boot();
+    const hasNote = w.eval(`DAILY.ayat.filter(a => a.note).length`);
+    ok(hasNote > 0, "в данных пропало поле note");
+
+    /* находим такой день и рендерим карточку на нём */
+    const dayIdx = w.eval(`(function(){
+      for (let i = 0; i < 200; i++) {
+        if (dailyForDate(new Date(2026, 0, 1 + i, 12), {}).ayah.note) return i;
+      }
+      return -1;
+    })()`);
+    ok(dayIdx >= 0, "не нашёлся день с оговоркой");
+
+    const note = w.eval(`dailyForDate(new Date(2026, 0, 1 + ${dayIdx}, 12), {}).ayah.note`);
+    const src = read("app.js");
+    ok(/ayah\.note/.test(src), "поле note не выводится в карточке");
+    ok(/class="daily-note"/.test(src), "у оговорки нет своего оформления");
+    ok(note.length > 20, "оговорка пустая");
+  });
+
   test("мысль дня: настройки не уходят на сервер", async () => {
     const { server, w } = await boot();
     const before = server.S.calls.length;

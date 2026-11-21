@@ -2066,3 +2066,16 @@ input::placeholder { color: #626880; }
 .time-btn.is-locked {
   text-decoration: none;
 }
+
+/* Оговорка о толковании: тише основного текста, но заметнее подписи,
+   с пометкой «важно» слева, чтобы её не приняли за украшение. */
+.daily-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  border-left: 2px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 0 8px 8px 0;
+}
