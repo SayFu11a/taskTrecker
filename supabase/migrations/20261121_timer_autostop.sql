@@ -20,10 +20,13 @@
 -- по умолчанию: трекер живёт по московскому времени, и полночь у него
 -- наступает тогда же, когда у человека.
 
+/* stable, а не immutable: значение читается из настройки сессии. Пометив
+   immutable, мы разрешили бы планировщику свернуть его в константу при
+   планировании — и смена пояса не применилась бы до пересоздания запроса. */
 create or replace function public.tracker_tz()
 returns text
 language sql
-immutable
+stable
 as $$
   select coalesce(nullif(current_setting('tracker.timezone', true), ''), 'Europe/Moscow');
 $$;
@@ -41,10 +44,11 @@ comment on function public.tracker_tz() is
 -- «date + interval '1 day'» в поясе DST-переходов даёт ровно следующую
 -- календарную полночь, а не 24 часа: именно полночь здесь и нужна.
 
+/* Зависит от tracker_tz() и таблиц часовых поясов — тоже stable. */
 create or replace function public.timer_day_end(p_date date)
 returns timestamptz
 language sql
-immutable
+stable
 as $$
   select ((p_date + 1)::timestamp at time zone public.tracker_tz());
 $$;
@@ -92,6 +96,11 @@ begin
   /* Если таймер уже идёт (created = false), отдаём его как есть — но с честным
      elapsed: он тоже не может перевалить за полночь своего дня. */
   select * into t from public.timers where user_id = u;
+  /* Строки может не быть (гонка с timer_stop на другом устройстве) — тогда
+     отдаём честное «таймера нет», а не падаем на t.date is null. */
+  if t is null then
+    return jsonb_build_object('created', false, 'running', false, 'now', now());
+  end if;
   capped := public.timer_day_end(t.date);
   elapsed := floor(extract(epoch from (least(now(), capped) - t.started_at)) / 60)::int;
   if elapsed < 0 then elapsed := 0; end if;
