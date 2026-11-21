@@ -133,6 +133,108 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     ok(card.querySelector(".daily-hadith"), "нет хадиса в карточке");
   });
 
+  test("мысль дня: кнопка переключателя стоит отдельной строкой под текстом", async () => {
+    const { w } = await boot();
+    const box = w.document.getElementById("dailyBox");
+
+    /* Каждый переключатель — карточка в столбик: заголовок со статусом,
+       описание и только потом кнопка. Иначе на узкой колонке профиля
+       кнопка выдавливала текст в вертикальную «лестницу». */
+    const rows = [...box.querySelectorAll(".daily-toggle")];
+    eq(rows.length, 3, "переключателей не три");
+
+    rows.forEach((row) => {
+      const head = row.querySelector(".daily-toggle-head");
+      const note = row.querySelector(".daily-toggle-note");
+      const btn = row.querySelector(".daily-toggle-btn");
+      ok(head, "нет верхней строки с заголовком");
+      ok(note, "нет описания");
+      ok(btn, "нет кнопки");
+
+      /* кнопка не лежит в одной строке с заголовком — она соседствует с ним
+         на уровне карточки, а не внутри head */
+      ok(!head.contains(btn), "кнопка внутри строки заголовка — снова налезет на текст");
+
+      /* и идёт последней: заголовок → описание → кнопка */
+      const kids = [...row.children];
+      eq(kids.indexOf(btn), kids.length - 1, "кнопка не последняя в карточке");
+      ok(kids.indexOf(head) < kids.indexOf(note), "описание стоит выше заголовка");
+    });
+
+    /* в вёрстке старое «в строку» не должно остаться */
+    const css = read("styles.css");
+    ok(!/\.daily-toggle\s*\{[^}]*align-items:\s*flex-start/.test(css),
+      "у .daily-toggle осталось выравнивание в строку");
+    ok(/\.daily-toggle-btn\s*\{[^}]*width:\s*100%/.test(css), "кнопка не на всю ширину");
+  });
+
+  test("мысль дня: хадис показывает текст, а не undefined", async () => {
+    /* У хадиса поле называется meaning, у цитаты — text. Когда карточка
+       читала hadith.text, на экране появлялось слово «undefined».
+       Здесь проверяем настоящий рендер: включаем только хадис. */
+    const { w } = await boot();
+    w.eval(`(function(){
+      localStorage.setItem("vp-tracker-daily", JSON.stringify({ quotes: false, ayat: false, hadith: true }));
+    })()`);
+    w.eval("renderDailyCard()");
+
+    const card = w.document.getElementById("dailyCard");
+    ok(!card.hidden, "карточка скрыта, хотя хадис включён");
+
+    const box = card.querySelector(".daily-hadith");
+    ok(box, "хадиса в карточке нет");
+
+    const text = (box.querySelector(".daily-thought") || {}).textContent || "";
+    ok(text.trim().length > 10, `текста хадиса нет: «${text}»`);
+    ok(!/undefined/.test(box.textContent), "в карточке снова «undefined»");
+    ok(!/undefined/.test(card.textContent), "«undefined» где-то в карточке");
+
+    /* источник на месте: у хадисов в src стоит сборник и номер */
+    const src = (box.querySelector(".daily-src") || {}).textContent || "";
+    ok(src.trim().length > 5, `нет источника хадиса: «${src}»`);
+  });
+
+  test("мысль дня: ни один текст карточки не превращается в undefined", async () => {
+    /* Общий предохранитель на все три вида: гоняем 60 дней с включённым
+       хадисом и проверяем, что в разметке ни разу нет «undefined». */
+    const { w } = await boot();
+    const dirty = w.eval(`(function(){
+      const bad = [];
+      for (let i = 0; i < 60; i++) {
+        const d = new Date(2026, 0, 1 + i, 12);
+        const data = dailyForDate(d, { quotes: true, ayat: true, hadith: true });
+        if (data.hadith && !(data.hadith.meaning || data.hadith.text)) bad.push("hadith:" + data.hadith.id);
+        if (data.thought && !data.thought.text) bad.push("thought:" + data.thought.id);
+        if (data.ayah && !data.ayah.meaning) bad.push("ayah:" + data.ayah.id);
+      }
+      return bad;
+    })()`);
+    eq(dirty, [], "у части записей нет текста — карточка покажет undefined");
+  });
+
+  test("мысль дня: оговорка о толковании аята показывается", async () => {
+    /* У 94:7–8 толкователи расходятся; в данных это поле note. Если его
+       не показать, смысл выглядит единственно верным — это неправда. */
+    const { w } = await boot();
+    const hasNote = w.eval(`DAILY.ayat.filter(a => a.note).length`);
+    ok(hasNote > 0, "в данных пропало поле note");
+
+    /* находим такой день и рендерим карточку на нём */
+    const dayIdx = w.eval(`(function(){
+      for (let i = 0; i < 200; i++) {
+        if (dailyForDate(new Date(2026, 0, 1 + i, 12), {}).ayah.note) return i;
+      }
+      return -1;
+    })()`);
+    ok(dayIdx >= 0, "не нашёлся день с оговоркой");
+
+    const note = w.eval(`dailyForDate(new Date(2026, 0, 1 + ${dayIdx}, 12), {}).ayah.note`);
+    const src = read("app.js");
+    ok(/ayah\.note/.test(src), "поле note не выводится в карточке");
+    ok(/class="daily-note"/.test(src), "у оговорки нет своего оформления");
+    ok(note.length > 20, "оговорка пустая");
+  });
+
   test("мысль дня: настройки не уходят на сервер", async () => {
     const { server, w } = await boot();
     const before = server.S.calls.length;
@@ -441,5 +543,38 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     const sql = read("supabase/migrations/20261121_timer_autostop_ROLLBACK.sql");
     ok(/timer_stop/.test(sql), "в откате нет восстановления timer_stop");
     ok(/cron\.unschedule\('timers_autostop'\)/.test(sql), "в откате не снимается задание крона");
+  });
+}
+
+/* ═══════════ §4. УВЕДОМЛЕНИЯ: ПОДПИСКА И СЕРВЕР ═══════════ */
+
+export function registerPush({ test, eq, ok, boot, sleep, read }) {
+  test("уведомления: подписка в браузере без строки на сервере — видно и лечится кнопкой", async () => {
+    const { server, w } = await boot();
+    const src = read("push.js");
+
+    /* Состояние «подписка есть в браузере, на сервере строки нет» должно быть
+       не молчаливым: иначе человек ждёт пуш и не понимает, почему тихо. */
+    ok(/pushServerState/.test(src), "нет состояния «сервер знает подписку»");
+    ok(/pushHasBrowserSub/.test(src), "нет состояния «подписка есть в браузере»");
+    ok(/не привязана к серверу/.test(src), "нет текста про отвязанную подписку");
+    ok(/relinkPush/.test(src), "нет функции переподключения");
+    ok(/id="pushRelink"/.test(src), "нет кнопки переподключения");
+
+    /* «Включено» больше не ставится по одному факту подписки в браузере:
+       только если сервер подтвердил строку. */
+    const refresh = src.slice(src.indexOf("async function refreshPushState"), src.indexOf("async function relinkPush"));
+    ok(/pushServerState = onServer/.test(refresh), "refreshPushState не спрашивает сервер");
+    ok(/onServer === true/.test(refresh), "«on» ставится без подтверждения сервера");
+  });
+
+  test("уведомления: переподключение пишет строку с device_id и endpoint", async () => {
+    const src = read("push.js");
+    const relink = src.slice(src.indexOf("async function relinkPush"));
+    const body = relink.slice(0, relink.indexOf("\n}\n"));
+    ok(/from\("push_subscriptions"\)\.upsert/.test(body), "relinkPush не пишет подписку");
+    ok(/device_id: deviceId\(\)/.test(body), "нет device_id — снова появятся строки-сироты");
+    ok(/endpoint: sub\.endpoint/.test(body), "нет endpoint");
+    ok(/onConflict: "endpoint"/.test(body), "нет защиты от дубля endpoint");
   });
 }

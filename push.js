@@ -10,6 +10,15 @@ const PUSH_KEY = "vp-tracker-push";
 const DEVICE_KEY = "vp-tracker-device-id";
 const HEADERS_COL = "device_id"; // колонка в push_subscriptions (миграция 20261117)
 
+/* Состояние уведомлений складывается из трёх независимых вещей:
+   разрешение в браузере, подписка в браузере и строка на сервере.
+   Телефон мог сохранить старую подписку, а строку на сервере удалили —
+   тогда напоминания молча не приходят. Объявлено здесь, до первого
+   renderPushBox(): иначе обращение к ещё не инициализированной переменной
+   уронило бы весь профиль. */
+let pushServerState = null; // null — не спрашивали; true/false — знаем
+let pushHasBrowserSub = null; // есть ли подписка в самом браузере
+
 /* Устройство — случайный id, он же переживает перезагрузку и обновление. */
 function deviceId() {
   try {
@@ -193,6 +202,10 @@ function renderPushBox() {
   }
 
   const enabled = pushEnabledLocally() && Notification.permission === "granted";
+  /* Подписка в браузере есть, но сервер её не знает: напоминания не придут,
+     хотя «разрешение выдано». Показываем это прямо, иначе человек ждёт пуш
+     и не понимает, почему тихо. */
+  const linked = pushServerState !== false;
 
   /* Ключ не вписан — честно говорим, что настраивать нечего. */
   if (!VAPID_PUBLIC_KEY) {
@@ -242,9 +255,27 @@ function renderPushBox() {
   /* Без входа подписка не дойдёт до сервера — говорим это до нажатия, а не после. */
   const signedIn = typeof session !== "undefined" && Boolean(session);
 
+  /* Отвязанное состояние описываем отдельно и до общего блока. */
+  if (!enabled && pushServerState === false && pushHasBrowserSub) {
+    root.innerHTML = `
+      <div class="acc-row">
+        <span class="acc-dot off"></span>
+        <div>
+          <div class="acc-title">Подписка не привязана к серверу</div>
+          <div class="acc-sub">В браузере подписка есть, но сервер о ней не знает — напоминания не придут. Привяжи заново: разрешение спрашивать не будут.</div>
+        </div>
+      </div>
+      <div class="push-actions">
+        <button class="primary-btn acc-btn" id="pushRelink">Привязать это устройство</button>
+      </div>`;
+    const relink = document.getElementById("pushRelink");
+    if (relink) relink.addEventListener("click", () => relinkPush());
+    return;
+  }
+
   root.innerHTML = `
     <div class="acc-row">
-      <span class="acc-dot ${enabled ? "on" : "off"}"></span>
+      <span class="acc-dot ${enabled && linked ? "on" : "off"}"></span>
       <div>
         <div class="acc-title">${enabled ? "Уведомления включены" : "Уведомления выключены"}</div>
         <div class="acc-sub">${
@@ -335,14 +366,98 @@ async function initServiceWorker() {
 }
 
 /* Подхватить уже существующую подписку без повторного запроса разрешения. */
+/* Состояние уведомлений: локально включено, подписка есть в браузере и
+   подписка есть на сервере. Три вещи независимы: телефон мог сохранить
+   старую подписку, а строку на сервере удалили (например, при очистке
+   устройств) — тогда напоминания молча не приходят, и человек не понимает
+   почему. В этом случае не включаем «on» сами, а показываем «не привязано»
+   и даём переподключить одной кнопкой. */
+async function pushSubscriptionExists() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return Boolean(await reg.pushManager.getSubscription());
+  } catch {
+    return false;
+  }
+}
+
 async function refreshPushState() {
   if (!pushSupported()) return;
+  const sub = await pushSubscriptionExists();
+  pushHasBrowserSub = sub;
+
+  if (!sub) {
+    /* подписки в браузере нет — и на сервере быть не должно */
+    pushServerState = false;
+    try {
+      localStorage.setItem(PUSH_KEY, "off");
+    } catch {}
+    renderPushBox();
+    return;
+  }
+
+  /* Подписка в браузере есть. Спрашиваем сервер, знает ли он её. */
+  let onServer = null;
+  try {
+    if (typeof sb !== "undefined" && sb && typeof session !== "undefined" && session) {
+      const { data, error } = await sb
+        .from("push_subscriptions")
+        .select("endpoint")
+        .eq("user_id", session.user.id)
+        .eq(HEADERS_COL, deviceId())
+        .limit(1);
+      if (!error) onServer = Array.isArray(data) && data.length > 0;
+    }
+  } catch {
+    /* не смогли спросить — не врём ни в ту, ни в другую сторону */
+  }
+
+  pushServerState = onServer;
+  /* «on» ставим только когда сервер действительно знает это устройство.
+     onServer === null (спросить не удалось, офлайн) — оставляем как было. */
+  if (onServer === true) {
+    try {
+      localStorage.setItem(PUSH_KEY, "on");
+    } catch {}
+  } else if (onServer === false) {
+    try {
+      localStorage.setItem(PUSH_KEY, "off");
+    } catch {}
+  }
+  renderPushBox();
+}
+
+/* Перепривязать текущую подписку браузера к серверу, не спрашивая разрешение
+   заново: право уже выдано, нужна только строка в базе. */
+async function relinkPush() {
+  if (!(typeof sb !== "undefined" && sb && session)) {
+    toast("Сначала войди через Google — без аккаунта сервер не знает, кому отправлять напоминания.");
+    return;
+  }
   try {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    if (sub) localStorage.setItem(PUSH_KEY, "on");
-  } catch {
-    /* ignore */
+    if (!sub) {
+      toast("В браузере нет подписки — включи уведомления заново.");
+      renderPushBox();
+      return;
+    }
+    const { error } = await sb.from("push_subscriptions").upsert(
+      {
+        user_id: session.user.id,
+        endpoint: sub.endpoint,
+        subscription: sub.toJSON(),
+        device_id: deviceId(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "endpoint" }
+    );
+    if (error) throw error;
+    localStorage.setItem(PUSH_KEY, "on");
+    pushServerState = true;
+    renderPushBox();
+    toast("Уведомления снова привязаны к этому устройству.");
+  } catch (e) {
+    toast("Не удалось привязать: " + (e && e.message ? e.message : "неизвестная ошибка"));
   }
-  renderPushBox();
 }

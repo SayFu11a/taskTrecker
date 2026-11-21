@@ -488,6 +488,7 @@ test("namazTick: дубль между вкладками и после пере
 
 const dailySuite = await import("./daily-day-tests.mjs");
 dailySuite.register({ test, eq, ok, boot, sleep, read });
+dailySuite.registerPush({ test, eq, ok, boot, sleep, read });
 
 /* ─────────── запуск ─────────── */
 (async () => {

@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v43";
+const BUILD_LABEL = "сборка v45";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -2480,14 +2480,28 @@ function renderDailyCard() {
     if (ayah.tip) {
       parts.push(`<p class="daily-tip">${escapeHtml(ayah.tip)}</p>`);
     }
+    /* note — оговорка про спорное толкование (у 94:7–8 толкователи расходятся).
+       Не показывать её нельзя: смысл подан как единственный, а это не так. */
+    if (ayah.note) {
+      parts.push(`<p class="daily-note">${escapeHtml(ayah.note)}</p>`);
+    }
     parts.push("</div>");
   }
 
   if (hadith) {
+    /* У хадиса поле называется meaning, а не text — в отличие от цитаты.
+       Именно на этом карточка однажды показала «undefined». Берём первое
+       непустое из обоих: данные могут прийти и в старом формате. */
+    const hadithText = hadith.meaning || hadith.text || "";
     parts.push(`<div class="daily-hadith">`);
-    parts.push(`<p class="daily-thought daily-thought-sm">${escapeHtml(hadith.text)}</p>`);
+    if (hadithText) {
+      parts.push(`<p class="daily-thought daily-thought-sm">${escapeHtml(hadithText)}</p>`);
+    }
     if (hadith.src) {
       parts.push(`<p class="daily-src">${escapeHtml(hadith.src)}</p>`);
+    }
+    if (hadith.tip) {
+      parts.push(`<p class="daily-tip">${escapeHtml(hadith.tip)}</p>`);
     }
     parts.push(`</div>`);
   }
@@ -2510,13 +2524,16 @@ function renderDailyBox() {
   root.innerHTML = rows
     .map(
       ([name, title, sub]) => `
-    <div class="acc-row daily-toggle">
-      <span class="acc-dot ${p[name] ? "on" : "off"}"></span>
-      <div>
-        <div class="acc-title">${title}</div>
-        <div class="acc-sub">${p[name] ? "Включено." : "Выключено."} ${sub}</div>
+    <div class="daily-toggle">
+      <div class="daily-toggle-head">
+        <span class="acc-dot ${p[name] ? "on" : "off"}"></span>
+        <div class="daily-toggle-title">
+          <div class="acc-title">${title}</div>
+          <div class="acc-sub">${p[name] ? "Включено." : "Выключено."}</div>
+        </div>
       </div>
-      <button class="ghost-btn acc-btn" data-daily="${name}">${p[name] ? "Выключить" : "Включить"}</button>
+      <p class="daily-toggle-note">${sub}</p>
+      <button class="ghost-btn acc-btn daily-toggle-btn" data-daily="${name}">${p[name] ? "Выключить" : "Включить"}</button>
     </div>`
     )
     .join("");
