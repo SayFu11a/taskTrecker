@@ -473,6 +473,11 @@ test("namazTick: дубль между вкладками и после пере
   ok(/namazShownKey|событие\+минута|event.*minute/.test(src) || /nowKey.*id.*ahead/.test(src), "ключ дедупликации не привязан к событию и минуте");
 });
 
+/* ═══════════ 5. МЫСЛЬ ДНЯ, ДНИ, АВТОСТОП ═══════════ */
+
+const dailySuite = await import("./daily-day-tests.mjs");
+dailySuite.register({ test, eq, ok, boot, sleep, read });
+
 /* ─────────── запуск ─────────── */
 (async () => {
   let i = 0;

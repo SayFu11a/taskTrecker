@@ -476,13 +476,26 @@ function savedMinutesFor(dateKey, blockId) {
 /* Сколько сейчас тикает по блоку (незаписанные минуты).
    Если таймер поставил сервер — считаем по его часам: телефон со сбитым
    временем иначе показывал лишние часы и записывал их в минуты. */
+/* Полночь, следующая за днём D, по местным часам — верхняя граница таймера.
+   Таймер с дня D не идёт в D+1: в 00:00 его время останавливается.
+   Считаем через календарную дату, а не «+24 часа», чтобы переход на летнее
+   время не сдвигал границу. */
+function dayEndMs(dateKey) {
+  const d = dateOf(dateKey);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0).getTime();
+}
+
 function runningMinutesFor(dateKey, blockId) {
   const t = timerFor(dateKey, blockId);
   if (!t) return 0;
   const rec = blockRecord(dateKey, blockId);
   const byServer = rec.timer && rec.timer.byServer && typeof srvNowMs === "function";
   const now = byServer ? srvNowMs() : Date.now();
-  return Math.max(0, Math.floor((now - t.startedAt) / 60000));
+  /* Потолок — полночь дня, к которому относится таймер. Без него забытый
+     на сутки таймер показывал «1440 мин» и в статистику шли сутки работы. */
+  const end = dayEndMs(dateKey);
+  const capped = Math.min(now, end);
+  return Math.max(0, Math.floor((capped - t.startedAt) / 60000));
 }
 
 /* Минуты «как есть сейчас»: записанные + тикающий таймер.
@@ -2558,7 +2571,80 @@ initServiceWorker().then(refreshPushState);
 initSync();
 
 /* идущие таймеры обновляем раз в секунду — только цифры, без полной перерисовки */
+/* ─────────────── автостоп в конце дня ─────────────── */
+
+/* Таймер, запущенный в дне D, живёт только до 00:00 этого дня. Забытый
+   таймер не должен накручивать часы на следующий день, поэтому: как только
+   видим в state таймер с датой раньше сегодняшней, закрываем его.
+   Порядок такой же, как у ручного стопа:
+   1) если в timers.js есть связь — просим сервер остановить: он вернёт
+      минуты, уже ограниченные полуночью, и флаг auto_capped;
+   2) сервер молчит (офлайн) — пишем локально, считая до 00:00 дня таймера;
+   3) показываем один тост на таймер, с датой и числом минут.
+   Повторный проход по уже закрытому таймеру ничего не делает: в state
+   его больше нет, а на сервере строки уже нет — второй timer_stop вернёт
+   stopped: false и ничего не запишет. */
+const autoStoppedTimers = new Set();
+
+function stopForgottenTimers() {
+  const nowKey = todayKey();
+  const forgotten = runningTimers().filter((t) => t.date < nowKey);
+  if (!forgotten.length) return;
+
+  forgotten.forEach((t) => {
+    const key = t.date + "|" + t.block;
+    /* один тост на таймер, даже если тик и focus пришли одновременно */
+    if (autoStoppedTimers.has(key)) return;
+    autoStoppedTimers.add(key);
+
+    const end = dayEndMs(t.date);
+    const started = t.startedAt;
+    /* локальный потолок: сколько минут относится к тому дню */
+    const cappedMin = Math.max(0, Math.floor((Math.min(Date.now(), end) - started) / 60000));
+    const label = blockName(t.block);
+    const dateText = DATE_FMT.format(dateOf(t.date));
+
+    const finishLocal = () => {
+      const already = savedMinutesFor(t.date, t.block);
+      /* не прибавляем поверх того, что мог записать сервер */
+      if (already < cappedMin) {
+        setBlockTimer(t.date, t.block, null);
+        writeMinutes(t.date, t.block, already + cappedMin);
+      } else {
+        setBlockTimer(t.date, t.block, null);
+      }
+      renderAll();
+      toast(`Таймер за ${dateText} остановлен в 00:00 — записано ${fmtMinutes(cappedMin)}.`);
+    };
+
+    if (typeof timerStopRemote !== "function") return finishLocal();
+
+    Promise.resolve(timerStopRemote())
+      .then((res) => {
+        if (res && res.stopped) {
+          /* сервер вернул минуты, уже обрезанные полуночью */
+          if (Number.isFinite(Number(res.min)) && res.date && res.block) {
+            const at = Number(res.min_at) || Date.now();
+            setBlockTimer(res.date, res.block, null);
+            touchMinutes(res.date, res.block, at);
+            writeMinutes(res.date, res.block, Number(res.min), { at });
+          }
+          renderAll();
+          toast(`Таймер за ${dateText} остановлен в 00:00 — записано ${fmtMinutes(Number(res.min) || 0)}.`);
+          return;
+        }
+        /* stopped: false значит «на сервере таймера уже нет» — тогда минуты
+           пишем сами, но только до полуночи. */
+        finishLocal();
+      })
+      .catch(finishLocal);
+  });
+}
+
 function tickTimerLabel() {
+  /* Забытый вчерашний таймер закрываем до отрисовки цифр: иначе человек
+     увидит «1440 мин» и только потом тост. */
+  stopForgottenTimers();
   const running = runningTimers();
   if (!running.length) return;
 
@@ -2728,8 +2814,13 @@ setInterval(() => {
   if (runningTimers().length) renderBlocks();
 }, 30000);
 
+/* Вернулись в окно — сразу проверяем забытые таймеры, не дожидаясь тика. */
+window.addEventListener("focus", () => stopForgottenTimers());
+window.addEventListener("pageshow", () => stopForgottenTimers());
+
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
+    stopForgottenTimers();
     renderNow();
     if (typeof namazSync === "function") namazSync(selectedDate);
     if (selectedDate !== todayKey()) return;
