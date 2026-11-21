@@ -2613,7 +2613,12 @@ function stopForgottenTimers() {
       } else {
         setBlockTimer(t.date, t.block, null);
       }
-      renderAll();
+      /* Полную перерисовку здесь звать нельзя: автостоп срабатывает и из тика,
+         в том числе до initSync(). Достаточно обновить то, где видны минуты. */
+      renderBlocks();
+      renderProgress();
+      renderHero();
+      renderNow();
       toast(`Таймер за ${dateText} остановлен в 00:00 — записано ${fmtMinutes(cappedMin)}.`);
     };
 
@@ -2629,7 +2634,10 @@ function stopForgottenTimers() {
             touchMinutes(res.date, res.block, at);
             writeMinutes(res.date, res.block, Number(res.min), { at });
           }
-          renderAll();
+          renderBlocks();
+          renderProgress();
+          renderHero();
+          renderNow();
           toast(`Таймер за ${dateText} остановлен в 00:00 — записано ${fmtMinutes(Number(res.min) || 0)}.`);
           return;
         }
