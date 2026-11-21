@@ -521,12 +521,23 @@ function setBlockMinutes(dateKey, blockId, minutes) {
 }
 
 function addHours(dateKey, blockId, deltaMin) {
+  /* Проверка здесь, а не только на кнопке: addHours зовут и уровни
+     («догнать порог»), и ручной ввод — мимо неё правка не пройдёт. */
+  if (!canEditHours(dateKey)) {
+    denyEdit(dateKey, "Часы");
+    return false;
+  }
   if (timerFor(dateKey, blockId)) stopTimer(dateKey, blockId);
   writeMinutes(dateKey, blockId, savedMinutesFor(dateKey, blockId) + deltaMin);
+  return true;
 }
 
 
 function startTimer(blockId) {
+  if (!canStartTimer(selectedDate)) {
+    denyEdit(selectedDate, "Таймер");
+    return;
+  }
   const running = runningTimers();
   if (running.length) {
     toast(`Уже идёт таймер: «${blockName(running[0].block)}». Сначала останови его.`);
@@ -843,10 +854,32 @@ function renderTimeRow(b) {
     : "Сколько реально потрачено на этот блок";
 
   const quick = el("div", "time-quick");
+  const hoursLocked = !canEditHours(selectedDate);
+  const hoursHint = dayMode(selectedDate) === "future"
+    ? "Будущий день — только просмотр"
+    : "Часы в этом дне менять нельзя";
+
+  /* «−» убирает четверть часа: часы правятся в прошлом дне, и убрать
+     лишнее так же важно, как добавить. */
+  const minusBtn = el("button", "time-btn", "−15 мин");
+  minusBtn.type = "button";
+  minusBtn.title = "Убрать 15 минут";
+  lockBtn(minusBtn, hoursLocked, hoursHint);
+  minusBtn.addEventListener("click", () => {
+    if (!canEditHours(selectedDate)) return denyEdit(selectedDate, "Часы");
+    addHours(selectedDate, b.id, -15);
+    renderAll();
+    play("tick");
+    toast(`${b.name}: −15 мин. Всего ${fmtMinutes(hoursFor(selectedDate, b.id))}.`);
+  });
+  quick.appendChild(minusBtn);
+
   [15, 30, 60].forEach((min) => {
     const btn = el("button", "time-btn", "+" + (min === 60 ? "1 ч" : min + " мин"));
     btn.type = "button";
+    lockBtn(btn, hoursLocked, hoursHint);
     btn.addEventListener("click", () => {
+      if (!canEditHours(selectedDate)) return denyEdit(selectedDate, "Часы");
       addHours(selectedDate, b.id, min);
       renderAll();
       play("tick");
@@ -859,7 +892,9 @@ function renderTimeRow(b) {
   const manualBtn = el("button", "time-btn time-btn-ghost", "своё");
   manualBtn.type = "button";
   manualBtn.title = "Ввести своё время";
+  lockBtn(manualBtn, hoursLocked, hoursHint);
   manualBtn.addEventListener("click", () => {
+    if (!canEditHours(selectedDate)) return denyEdit(selectedDate, "Часы");
     const input = prompt("Сколько минут записать?\nМожно с минусом, чтобы убрать: -15\nМожно в часах: 1.5 = 90 минут", "45");
     if (input === null) return;
     const min = parseMinutesInput(input);
@@ -877,7 +912,33 @@ function renderTimeRow(b) {
   const timerBtn = el("button", "time-btn time-start" + (running ? " running" : ""), running ? "■ стоп" : "▶ старт");
   timerBtn.type = "button";
   timerBtn.title = running ? "Остановить таймер" : "Запустить таймер для этого блока";
-  timerBtn.addEventListener("click", () => (running ? stopTimer(selectedDate, b.id) : startTimer(b.id)));
+  /* Стоп идущего таймера доступен всегда: он мог идти с прошлого дня,
+     и человек вправе его остановить. Запуск — только в сегодняшнем дне. */
+  if (!running) {
+    lockBtn(timerBtn, !canStartTimer(selectedDate), "Таймер работает только в сегодняшнем дне");
+  }
+  timerBtn.addEventListener("click", () => {
+    if (running) return stopTimer(selectedDate, b.id);
+    if (!canStartTimer(selectedDate)) {
+      toast("Таймер работает только в сегодняшнем дне.");
+      return;
+    }
+    startTimer(b.id);
+  });
+
+  const clearBtn = el("button", "time-btn time-btn-ghost time-clear", "обнулить");
+  clearBtn.type = "button";
+  clearBtn.title = "Обнулить часы в этом блоке";
+  lockBtn(clearBtn, hoursLocked, hoursHint);
+  clearBtn.addEventListener("click", () => {
+    if (!canEditHours(selectedDate)) return denyEdit(selectedDate, "Часы");
+    if (timerFor(selectedDate, b.id)) stopTimer(selectedDate, b.id);
+    writeMinutes(selectedDate, b.id, 0);
+    renderAll();
+    play("tick");
+    toast(`${b.name}: часы обнулены.`);
+  });
+  quick.appendChild(clearBtn);
 
   const right = el("div", "time-right");
   right.appendChild(quick);
@@ -896,6 +957,99 @@ function renderTimeRow(b) {
   }
 
   return row;
+}
+
+/* ─────────────── прошлые и будущие дни ─────────────── */
+
+/* Что можно править в прошлом дне. Часы — да: задним числом человек честно
+   вспоминает, сколько работал. Намаз и тренировки — нет: это не «сколько»,
+   а факт, и задним числом он превращается в подгонку. */
+const PAST_DAY_EDIT = { hours: true, namaz: false, gym: false };
+
+function isTodayKey(key) {
+  return key === todayKey();
+}
+
+function isPastKey(key) {
+  return typeof key === "string" && key < todayKey();
+}
+
+/* Подпись и правила дня. Одна функция на весь экран, чтобы баннер и кнопки
+   не разъезжались. */
+function dayMode(key) {
+  if (isFutureDate(key)) return "future";
+  if (isPastKey(key)) return "past";
+  return "today";
+}
+
+function dayBannerText(key) {
+  const mode = dayMode(key);
+  if (mode === "past") return "Прошлый день: можно править только часы";
+  if (mode === "future") return "Будущий день — только просмотр";
+  return "";
+}
+
+/* Можно ли править часы в этом дне. */
+function canEditHours(key) {
+  const mode = dayMode(key);
+  return mode === "today" || (mode === "past" && PAST_DAY_EDIT.hours);
+}
+
+/* Можно ли отметить намаз / тренировку. */
+function canEditNamaz(key) {
+  const mode = dayMode(key);
+  return mode === "today" || (mode === "past" && PAST_DAY_EDIT.namaz);
+}
+
+function canEditGym(key) {
+  const mode = dayMode(key);
+  return mode === "today" || (mode === "past" && PAST_DAY_EDIT.gym);
+}
+
+/* Таймер есть смысл запускать только в сегодняшнем дне: вчерашний уже
+   закончился, а завтрашний ещё не начался. Остановить идущий — можно всегда. */
+function canStartTimer(key) {
+  return isTodayKey(key);
+}
+
+/* Единый отказ: и тост, и «почему нельзя» в одном месте. */
+function denyEdit(key, what) {
+  const mode = dayMode(key);
+  if (mode === "future") toast(`Будущий день — только просмотр. ${what} не изменится.`);
+  else toast(`Прошлый день: можно править только часы. ${what} не изменится.`);
+}
+
+/* Единый вид неактивной кнопки: и CSS-класс, и настоящий disabled,
+   и aria-disabled для скринридеров. Текст остаётся читаемым. */
+function lockBtn(btn, locked, hint) {
+  if (!btn) return btn;
+  btn.classList.toggle("is-locked", !!locked);
+  if (locked) {
+    btn.setAttribute("aria-disabled", "true");
+    btn.disabled = true;
+    if (hint) btn.title = hint;
+  } else {
+    btn.removeAttribute("aria-disabled");
+    btn.disabled = false;
+  }
+  return btn;
+}
+
+/* Плашка над днём: прямо говорит, что можно, а что нет. */
+function renderDayBanner() {
+  const root = document.getElementById("dayBanner");
+  if (!root) return;
+  const text = dayBannerText(selectedDate);
+  if (!text) {
+    root.hidden = true;
+    root.textContent = "";
+    root.className = "day-banner";
+    return;
+  }
+  const mode = dayMode(selectedDate);
+  root.hidden = false;
+  root.textContent = text;
+  root.className = "day-banner day-banner-" + mode;
 }
 
 /* ─────────────── прогресс-кольцо ─────────────── */
@@ -974,6 +1128,10 @@ function renderModes() {
     btn.type = "button";
     btn.dataset.mode = key;
     btn.addEventListener("click", () => {
+      if (dayMode(selectedDate) !== "today") {
+        denyEdit(selectedDate, "Режим дня");
+        return;
+      }
       state.modes[selectedDate] = key;
       touchDay(selectedDate);
       save(selectedDate);
@@ -1005,8 +1163,8 @@ function namazDone(dateKey, id) {
 }
 
 function toggleNamaz(dateKey, id) {
-  if (isFutureDate(dateKey)) {
-    toast("Это будущий день — намаз отметить нельзя заранее.");
+  if (!canEditNamaz(dateKey)) {
+    denyEdit(dateKey, "Намаз");
     return;
   }
   if (!state.namaz) state.namaz = {};
@@ -1137,6 +1295,13 @@ function renderNamaz() {
     );
     row.type = "button";
     row.title = isDone ? "Снять отметку" : "Отметить, что намаз выполнен";
+    /* В прошлом дне намаз задним числом не отмечается, в будущем — тем более.
+       Кнопка гаснет и перестаёт быть кнопкой для скринридера. */
+    if (!canEditNamaz(dateKey)) {
+      lockBtn(row, true, dayMode(dateKey) === "future"
+        ? "Будущий день — только просмотр"
+        : "Прошлый день: намаз задним числом не отмечается");
+    }
     row.innerHTML = `
       <span class="prayer-icon">${p.icon}</span>
       <span class="prayer-name">${p.name}<small>${p.until} · до ${namazHHMM(p.end)}</small></span>
@@ -1293,6 +1458,10 @@ function renderGym() {
     row.innerHTML = `<span class="box">✓</span><span>${p.label}</span><span class="wc">25–35 мин</span>`;
     row.addEventListener("click", (e) => {
       e.preventDefault();
+      if (!canEditGym(selectedDate)) {
+        denyEdit(selectedDate, "Тренировка");
+        return;
+      }
       const w = ensureGymWeek(state.week);
       w[p.key] = !w[p.key];
       w.updatedAt = new Date().toISOString(); // снятая галочка тоже должна уехать
@@ -2352,6 +2521,7 @@ function renderDailyBox() {
 function renderAll() {
   if (typeof namazSync === "function" && namazEnabled()) namazSync(selectedDate);
   renderDailyCard();
+  renderDayBanner();
   if (typeof renderNamaz === "function") renderNamaz();
   renderModes();
   renderBlocks();

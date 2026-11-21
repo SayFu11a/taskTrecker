@@ -1953,3 +1953,72 @@ input::placeholder { color: #626880; }
   .daily-ar { font-size: 22px; }
   .daily-card { padding: 16px; }
 }
+
+/* ─────────── прошлые и будущие дни ─────────── */
+
+.day-banner {
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+
+.day-banner-past {
+  border-color: rgba(255, 190, 90, 0.35);
+  background: rgba(255, 190, 90, 0.08);
+}
+
+.day-banner-future {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+}
+
+/* Неактивный элемент: тусклый, без курсора и без реакции на наведение.
+   Текст остаётся читаемым — это подсказка, а не мусор. */
+.is-locked {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+  filter: saturate(0.5);
+  pointer-events: auto;
+  transition: none !important;
+}
+
+.is-locked:hover,
+.is-locked:active,
+.is-locked:focus {
+  transform: none !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  outline: none !important;
+  animation: none !important;
+}
+
+.is-locked::after {
+  content: none !important;
+}
+
+.time-btn.time-clear {
+  opacity: 0.85;
+}
+
+.time-btn.time-clear:hover {
+  opacity: 1;
+}
+
+/* Баннер перекрывает правило прозрачности для своих кнопок не должен:
+   .is-locked остаётся 0.45; у заблокированного таймера текст-подсказка
+   держится читаемым через title, а сам ярлык не исчезает полностью. */
+.time-start.is-locked {
+  color: var(--muted);
+}
+
+.mode-btn.is-locked,
+.prayer-row.is-locked,
+.time-btn.is-locked {
+  text-decoration: none;
+}
