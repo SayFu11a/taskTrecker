@@ -1982,9 +1982,10 @@ input::placeholder { color: #626880; }
    Текст остаётся читаемым — это подсказка, а не мусор. */
 .is-locked {
   opacity: 0.45;
+  /* pointer-events остаётся auto: у disabled-кнопок курсор not-allowed
+     и подсказка title должны работать, а клик всё равно не пройдёт */
   cursor: not-allowed !important;
   filter: saturate(0.5);
-  pointer-events: auto;
   transition: none !important;
 }
 
@@ -1993,10 +1994,19 @@ input::placeholder { color: #626880; }
 .is-locked:focus {
   transform: none !important;
   box-shadow: none !important;
+  background: inherit !important;
   background-image: none !important;
+  border-color: inherit !important;
   outline: none !important;
   animation: none !important;
 }
+
+/* Кнопки внутри заблокированного блока тоже не должны реагировать. */
+.is-locked .time-btn:hover,
+.is-locked .time-btn:active {
+  background: transparent !important;
+}
+
 
 .is-locked::after {
   content: none !important;
