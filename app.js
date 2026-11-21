@@ -3,7 +3,7 @@
 const STORE_KEY = "vp-tracker-v1";
 
 /* Версия сборки — видна в профиле. Менять вместе с VERSION в sw.js. */
-const BUILD_LABEL = "сборка v43";
+const BUILD_LABEL = "сборка v44";
 
 const DEFAULT_STATE = {
   days: {},        // legacy: старые уровни { "2026-11-04": { ulbi: "norm" } }, только для миграции
@@ -2510,13 +2510,16 @@ function renderDailyBox() {
   root.innerHTML = rows
     .map(
       ([name, title, sub]) => `
-    <div class="acc-row daily-toggle">
-      <span class="acc-dot ${p[name] ? "on" : "off"}"></span>
-      <div>
-        <div class="acc-title">${title}</div>
-        <div class="acc-sub">${p[name] ? "Включено." : "Выключено."} ${sub}</div>
+    <div class="daily-toggle">
+      <div class="daily-toggle-head">
+        <span class="acc-dot ${p[name] ? "on" : "off"}"></span>
+        <div class="daily-toggle-title">
+          <div class="acc-title">${title}</div>
+          <div class="acc-sub">${p[name] ? "Включено." : "Выключено."}</div>
+        </div>
       </div>
-      <button class="ghost-btn acc-btn" data-daily="${name}">${p[name] ? "Выключить" : "Включить"}</button>
+      <p class="daily-toggle-note">${sub}</p>
+      <button class="ghost-btn acc-btn daily-toggle-btn" data-daily="${name}">${p[name] ? "Выключить" : "Включить"}</button>
     </div>`
     )
     .join("");

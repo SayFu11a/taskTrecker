@@ -1939,14 +1939,48 @@ input::placeholder { color: #626880; }
   border-top: 1px solid var(--line);
 }
 
+/* Каждый переключатель — отдельная карточка в столбик: заголовок со
+   статусом, описание, и только под ними кнопка на всю ширину. Раньше
+   кнопка стояла в одну строку с текстом и на узкой колонке выдавливала
+   его в вертикальную «лестницу». */
 .daily-toggle {
-  align-items: flex-start;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.daily-toggle .acc-btn {
-  margin-left: auto;
-  flex: 0 0 auto;
+.daily-toggle + .daily-toggle {
+  margin-top: 10px;
+}
+
+.daily-toggle-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.daily-toggle-title {
+  min-width: 0;
+}
+
+.daily-toggle-title .acc-sub {
+  margin-top: 1px;
+}
+
+.daily-toggle-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.daily-toggle-btn {
+  width: 100%;
+  margin-top: 2px;
 }
 
 @media (max-width: 520px) {

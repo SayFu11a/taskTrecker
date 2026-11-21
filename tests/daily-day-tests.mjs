@@ -133,6 +133,41 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     ok(card.querySelector(".daily-hadith"), "нет хадиса в карточке");
   });
 
+  test("мысль дня: кнопка переключателя стоит отдельной строкой под текстом", async () => {
+    const { w } = await boot();
+    const box = w.document.getElementById("dailyBox");
+
+    /* Каждый переключатель — карточка в столбик: заголовок со статусом,
+       описание и только потом кнопка. Иначе на узкой колонке профиля
+       кнопка выдавливала текст в вертикальную «лестницу». */
+    const rows = [...box.querySelectorAll(".daily-toggle")];
+    eq(rows.length, 3, "переключателей не три");
+
+    rows.forEach((row) => {
+      const head = row.querySelector(".daily-toggle-head");
+      const note = row.querySelector(".daily-toggle-note");
+      const btn = row.querySelector(".daily-toggle-btn");
+      ok(head, "нет верхней строки с заголовком");
+      ok(note, "нет описания");
+      ok(btn, "нет кнопки");
+
+      /* кнопка не лежит в одной строке с заголовком — она соседствует с ним
+         на уровне карточки, а не внутри head */
+      ok(!head.contains(btn), "кнопка внутри строки заголовка — снова налезет на текст");
+
+      /* и идёт последней: заголовок → описание → кнопка */
+      const kids = [...row.children];
+      eq(kids.indexOf(btn), kids.length - 1, "кнопка не последняя в карточке");
+      ok(kids.indexOf(head) < kids.indexOf(note), "описание стоит выше заголовка");
+    });
+
+    /* в вёрстке старое «в строку» не должно остаться */
+    const css = read("styles.css");
+    ok(!/\.daily-toggle\s*\{[^}]*align-items:\s*flex-start/.test(css),
+      "у .daily-toggle осталось выравнивание в строку");
+    ok(/\.daily-toggle-btn\s*\{[^}]*width:\s*100%/.test(css), "кнопка не на всю ширину");
+  });
+
   test("мысль дня: настройки не уходят на сервер", async () => {
     const { server, w } = await boot();
     const before = server.S.calls.length;
@@ -441,5 +476,38 @@ export function register({ test, eq, ok, boot, sleep, read }) {
     const sql = read("supabase/migrations/20261121_timer_autostop_ROLLBACK.sql");
     ok(/timer_stop/.test(sql), "в откате нет восстановления timer_stop");
     ok(/cron\.unschedule\('timers_autostop'\)/.test(sql), "в откате не снимается задание крона");
+  });
+}
+
+/* ═══════════ §4. УВЕДОМЛЕНИЯ: ПОДПИСКА И СЕРВЕР ═══════════ */
+
+export function registerPush({ test, eq, ok, boot, sleep, read }) {
+  test("уведомления: подписка в браузере без строки на сервере — видно и лечится кнопкой", async () => {
+    const { server, w } = await boot();
+    const src = read("push.js");
+
+    /* Состояние «подписка есть в браузере, на сервере строки нет» должно быть
+       не молчаливым: иначе человек ждёт пуш и не понимает, почему тихо. */
+    ok(/pushServerState/.test(src), "нет состояния «сервер знает подписку»");
+    ok(/pushHasBrowserSub/.test(src), "нет состояния «подписка есть в браузере»");
+    ok(/не привязана к серверу/.test(src), "нет текста про отвязанную подписку");
+    ok(/relinkPush/.test(src), "нет функции переподключения");
+    ok(/id="pushRelink"/.test(src), "нет кнопки переподключения");
+
+    /* «Включено» больше не ставится по одному факту подписки в браузере:
+       только если сервер подтвердил строку. */
+    const refresh = src.slice(src.indexOf("async function refreshPushState"), src.indexOf("async function relinkPush"));
+    ok(/pushServerState = onServer/.test(refresh), "refreshPushState не спрашивает сервер");
+    ok(/onServer === true/.test(refresh), "«on» ставится без подтверждения сервера");
+  });
+
+  test("уведомления: переподключение пишет строку с device_id и endpoint", async () => {
+    const src = read("push.js");
+    const relink = src.slice(src.indexOf("async function relinkPush"));
+    const body = relink.slice(0, relink.indexOf("\n}\n"));
+    ok(/from\("push_subscriptions"\)\.upsert/.test(body), "relinkPush не пишет подписку");
+    ok(/device_id: deviceId\(\)/.test(body), "нет device_id — снова появятся строки-сироты");
+    ok(/endpoint: sub\.endpoint/.test(body), "нет endpoint");
+    ok(/onConflict: "endpoint"/.test(body), "нет защиты от дубля endpoint");
   });
 }
