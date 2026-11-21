@@ -70,6 +70,10 @@
 
   <!-- ─────────── ДЕНЬ ─────────── -->
   <section class="panel active" id="panel-day">
+    <div class="daily-card card" id="dailyCard" hidden></div>
+
+    <p class="day-banner" id="dayBanner" hidden></p>
+
     <div class="now-card" id="nowCard" aria-live="polite"></div>
 
     <div class="prayer-card card" id="prayerCard"></div>
@@ -287,6 +291,12 @@
       </div>
 
       <div class="card profile-card">
+        <div class="profile-label">Мысль дня</div>
+        <div id="dailyBox"></div>
+        <p class="acc-sub profile-note">Выбор на день одинаков на всех устройствах: настройки хранятся в этом браузере и на сервер не уходят.</p>
+      </div>
+
+      <div class="card profile-card">
         <div class="profile-label">Намаз</div>
         <div id="namazBox"></div>
       </div>
@@ -322,6 +332,7 @@
 <script src="timersync.js"></script>
 <script src="tabsync.js"></script>
 <script src="push.js"></script>
+<script src="quotes.js"></script>
 <script src="app.js"></script>
 <script src="diary.js"></script>
 <script src="levels.js"></script>

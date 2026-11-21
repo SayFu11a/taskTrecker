@@ -10,6 +10,15 @@ import { fileURLToPath } from "node:url";
 import { makeServer, makeApp, ROOT } from "../tests-support/harness.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* Даты в тестах считаются от сегодняшнего дня: зашитые «2026-11-17» через
+   неделю оказывались в прошлом, и тесты падали не из-за кода, а из-за
+   календаря. dayKey(-1) — вчера, dayKey(0) — сегодня. */
+const dayKey = (offset = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (f) => readFileSync(path.join(ROOT, f), "utf8");
 
@@ -293,7 +302,7 @@ test("намаз: после 6 часов без новых отметок оп�
   ok(fresh, "время полной сверки старое — опрос пойдёт полной выгрузкой");
 
   /* Инкрементальный запрос содержит срез по дате, полный — нет. */
-  server.S.namaz["2026-11-19|fajr"] = { done: true, updated_at: new Date(Date.now() - 60000).toISOString() };
+  server.S.namaz[dayKey(0) + "|fajr"] = { done: true, updated_at: new Date(Date.now() - 60000).toISOString() };
   w.eval("pullSettings()");
   await sleep(600);
   const before = w.localStorage.getItem("vp-tracker-namaz-synced-at-v2");
@@ -337,10 +346,10 @@ test("отправляются только изменённые дни, пус�
     "пустая отправка дней всё-таки ушла");
 
   /* меняем один день из трёх — уезжает ровно он */
-  w.eval(`state.hours["2026-11-18"] = { jobs: { min: 90 } };
-          state.hours["2026-11-17"] = { ulbi: { min: 45 } };
-          state.hours["2026-11-16"] = { news: { min: 20 } };
-          markDayDirty("2026-11-17");
+  w.eval(`state.hours["${dayKey(-2)}"] = { jobs: { min: 90 } };
+          state.hours["${dayKey(-1)}"] = { ulbi: { min: 45 } };
+          state.hours["${dayKey(-3)}"] = { news: { min: 20 } };
+          markDayDirty("${dayKey(-1)}");
           pushAll();`);
   await sleep(400);
   const sent = server.S.calls
@@ -348,14 +357,14 @@ test("отправляются только изменённые дни, пус�
     .slice(before)
     .flatMap((c) => c.rows || [])
     .map((r) => r.date);
-  eq([...new Set(sent)], ["2026-11-17"], "уехали не только изменённые дни");
+  eq([...new Set(sent)], [dayKey(-1)], "уехали не только изменённые дни");
 });
 
 test("после обновления несохранённые локальные дни уезжают на сервер (миграция «грязных»)", async () => {
   /* состояние «старой версии»: дни есть в localStorage, ключа dirty нет */
   const storage = {
     "vp-tracker-v1": JSON.stringify({
-      hours: { "2026-11-18": { jobs: { min: 90 } }, "2026-11-17": { ulbi: { min: 45 } } },
+      hours: { [dayKey(-1)]: { jobs: { min: 90 } }, [dayKey(-2)]: { ulbi: { min: 45 } } },
       meta: {},
       days: {},
       modes: {},
@@ -366,7 +375,7 @@ test("после обновления несохранённые локальн�
   ok(w.localStorage.getItem("vp-tracker-dirty-days"), "дни не помечены изменёнными при обновлении");
   const pushed = server.S.calls.filter((c) => c.name === "days.upsert").flatMap((c) => c.rows || []);
   const dates = new Set(pushed.map((r) => r.date));
-  ok(dates.has("2026-11-18") && dates.has("2026-11-17"),
+  ok(dates.has(dayKey(-1)) && dates.has(dayKey(-2)),
     `не уехали старые дни: отправлены ${JSON.stringify([...dates])}`);
   eq(w.localStorage.getItem("vp-tracker-dirty-migrated-v1"), "1", "миграция не отмечена как выполненная");
 
@@ -381,7 +390,7 @@ test("после провала связи «online» сразу досылае�
   await sleep(600);
 
   /* правка, которую надо дослать */
-  w.eval(`state.hours["2026-11-18"] = { jobs: { min: 90 } }; markDayDirty("2026-11-18");`);
+  w.eval(`state.hours["${dayKey(-1)}"] = { jobs: { min: 90 } }; markDayDirty("${dayKey(-1)}");`);
   w.eval(`localStorage.setItem("vp-tracker-pending", "1");`);
 
   /* сеть пропала: проход падает */
@@ -431,20 +440,22 @@ test("жизненный цикл: 6 событий за 6 секунд дают
 test("триггер days_touch: повторная запись тех же дней не двигает updated_at", async () => {
   const { server, w } = await boot({ latency: 30 });
   await sleep(400);
+  /* sb мог обнулиться, если initSync не дождался сети: подставляем сервер заново */
+  w.__gluesb();
   /* пишем день дважды с одинаковыми данными — как старый клиент, который
      отправлял все дни на каждый сигнал */
-  const row = { user_id: "u1", date: "2026-11-19", hours: { jobs: { min: 40 } }, mode: null, updated_at: new Date().toISOString() };
+  const row = { user_id: "u1", date: dayKey(0), hours: { jobs: { min: 40 } }, mode: null, updated_at: new Date().toISOString() };
   await w.eval(`(async()=>{ await sb.from("days").upsert(${JSON.stringify([row])}, { onConflict: "user_id,date" }); })()`);
   await sleep(200);
-  const firstAt = server.S.days["2026-11-19"].updated_at;
+  const firstAt = server.S.days[dayKey(0)].updated_at;
   await sleep(30);
   await w.eval(`(async()=>{ await sb.from("days").upsert(${JSON.stringify([row])}, { onConflict: "user_id,date" }); })()`);
   await sleep(200);
-  eq(server.S.days["2026-11-19"].updated_at, firstAt, "updated_at сдвинулся от записи без изменений");
+  eq(server.S.days[dayKey(0)].updated_at, firstAt, "updated_at сдвинулся от записи без изменений");
   /* а реальное изменение — двигает */
   await w.eval(`(async()=>{ await sb.from("days").upsert([{...${JSON.stringify(row)}, hours: { jobs: { min: 55 } }}], { onConflict: "user_id,date" }); })()`);
   await sleep(200);
-  ok(server.S.days["2026-11-19"].updated_at !== firstAt, "updated_at не сдвинулся при реальном изменении");
+  ok(server.S.days[dayKey(0)].updated_at !== firstAt, "updated_at не сдвинулся при реальном изменении");
 });
 
 test("SQL-миграция: функция touch_updated_at сравнивает старое и новое", async () => {
@@ -473,11 +484,21 @@ test("namazTick: дубль между вкладками и после пере
   ok(/namazShownKey|событие\+минута|event.*minute/.test(src) || /nowKey.*id.*ahead/.test(src), "ключ дедупликации не привязан к событию и минуте");
 });
 
+/* ═══════════ 5. МЫСЛЬ ДНЯ, ДНИ, АВТОСТОП ═══════════ */
+
+const dailySuite = await import("./daily-day-tests.mjs");
+dailySuite.register({ test, eq, ok, boot, sleep, read });
+
 /* ─────────── запуск ─────────── */
 (async () => {
+  /* ONLY=3,13 — прогнать только эти тесты (отладка); без переменной идут все */
+  const only = (process.env.ONLY || "").split(",").filter(Boolean).map(Number);
   let i = 0;
   for (const { name, fn } of results) {
     i++;
+    if (only.length && !only.includes(i)) {
+      if (!only.includes(i)) { results.length; continue; }
+    }
     try {
       await fn();
       console.log(`✔ ${i}. ${name}`);

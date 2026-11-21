@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 /* Корень репозитория — рядом с этим файлом, чтобы тесты работали из любого места. */
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") + path.sep;
-export const FILES = ["data.js","namaz.js","sound.js","achievements.js","sync.js","timersync.js","tabsync.js","push.js","app.js","diary.js","levels.js","glass.js"];
+export const FILES = ["data.js","quotes.js","namaz.js","sound.js","achievements.js","sync.js","timersync.js","tabsync.js","push.js","app.js","diary.js","levels.js","glass.js"];
 
 /* ───── сервер ───── */
 export function makeServer(clockRef = null) {
@@ -201,8 +201,32 @@ export function makeApp(server, { files = FILES, storage = null } = {}) {
   /* jsdom не умеет import() с CDN, а initSync() при неудаче обнуляет sb.
      Поэтому gluesb() зовётся после каждой загрузки: он и подставляет сервер,
      и гасит повторный поход в сеть (initSync уже отработал с ошибкой). */
-  w.__gluesb = () => { try { w.eval("sb = __sb; session = __session; initSync = async () => {};"); } catch {} };
+  /* initSync из sync.js асинхронный: он грузит SDK с CDN (в jsdom это
+     всегда провал) и в обработчике ошибки делает `sb = null` — возможно,
+     УЖЕ ПОСЛЕ того, как мы подставили сервер. В первом окне подстановка
+     успевала, во втором и следующих — нет, и srvReady() навсегда оставался
+     false. Из-за этого тесты 3, 5, 11–15, 18 падали в общем прогоне и
+     проходили поодиночке — проблема тестовой обвязки, не кода.
+     Поэтому заглушку ставим ДО загрузки app.js (он зовёт initSync в конце),
+     а сервер подставляем сразу после. */
+  /* Подставляем сервер в те самые переменные sync.js.
+     Важно: `sb` и `session` объявлены в sync.js через `let` — это НЕ свойства
+     window. Присваивание из w.eval("sb = __sb") создавало window.sb, а
+     sync.js продолжал видеть свой null, и srvReady() во втором и следующих
+     окнах оставался false (тесты 3, 5, 11–15, 18 падали в общем прогоне,
+     но проходили поодиночке). Поэтому берём реальные лексические
+     переменные через значения, вычисленные в области того же скрипта. */
+  w.__gluesb = () => {
+    try {
+      w.eval("__setSync(__sb, __session)");
+    } catch {
+      try { w.eval("sb = __sb; session = __session;"); } catch {}
+    }
+  };
+  w.__stubSync = () => { try { w.eval("initSync = async () => {};"); } catch {} };
   for (const f of files) {
+    /* app.js последним вызывает initSync() — заглушка должна стоять до него */
+    if (f === "app.js") w.__stubSync();
     const s = w.document.createElement("script");
     s.textContent = readFileSync(ROOT + f, "utf8");
     w.document.body.appendChild(s);

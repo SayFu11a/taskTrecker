@@ -14,6 +14,14 @@ const APP_URL = "https://profession-tracker.vercel.app/";
 
 let sb = null; // клиент
 let session = null;
+
+/* Мостик для тестов: снаружи нельзя присвоить лексическую `let`-переменную
+   из другого скрипта (window.sb — это другое). Функция живёт в этой же
+   области и пишет ровно в те переменные, которые читает весь модуль. */
+function __setSync(client, sess) {
+  sb = client;
+  session = sess;
+}
 let syncBusy = false;
 let pushTimer = null;
 let lastAuthError = null; // ошибка возврата после входа — показывается на экране аккаунта
